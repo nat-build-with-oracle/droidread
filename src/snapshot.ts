@@ -117,6 +117,10 @@ function line(n: Node, maxName: number, ref?: string): string {
   if (n.id) attrs.push(`#${n.id}`);
   if (n.clickable) attrs.push("clickable");
   if (attrs.length) bits.push(`[${attrs.join(" ")}]`);
+  // Position travels with every ref. An unlabelled clickable — Messenger's reload control
+  // above a thread carries no text, description or id — can only be matched to what the
+  // eye sees in a screenshot by where it sits. Without this the ref is unusable.
+  if (ref) bits.push(`@${n.x},${n.y}`);
   return bits.join(" ");
 }
 
