@@ -133,11 +133,16 @@ export function buildServer(): McpServer {
     "PICTURE of the phone screen right now, as an image. Use this when the accessibility tree is not enough: photos, stickers, unlabelled dialogs, or checking that a tap did what you meant. Read-only. droidread_snapshot is far cheaper and is what you act on by selector — reach for the image second, not first.",
     { width: z.number().optional().describe("downscale width in px (default 540; 0 = original PNG, ~10x more tokens)"),
       quality: z.number().optional().describe("JPEG quality 2 (best) to 31 (worst), default 6") },
-    ({ width, quality }) => withDevice("droidread_screenshot", async () => {
+    // Deliberately NOT behind the device lock. A screenshot changes nothing, and the
+    // whole point of being able to look is to look WHILE a long read is running — queueing
+    // it behind a five-minute scroll would defeat that. With DROIDREAD_STREAM_URL set it
+    // does not touch adb at all: the web viewer's capture loop already has the frame.
+    async ({ width, quality }) => {
       const shot = await screenshot(width ?? 540, quality ?? 6);
       const kb = Math.round(shot.bytes / 1024);
-      return image(shot.data, shot.mime, `phone screen · ${shot.mime} · ${shot.width ? `${shot.width}px wide · ` : "original size · "}${kb} KB`);
-    }),
+      const via = shot.source === "stream" ? `via web viewer, frame ${shot.ageMs ?? 0}ms old` : "via adb screencap";
+      return image(shot.data, shot.mime, `phone screen · ${shot.mime} · ${shot.width ? `${shot.width}px wide · ` : "original size · "}${kb} KB · ${via}`);
+    },
   );
 
   server.tool(

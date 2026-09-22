@@ -19,6 +19,53 @@ export interface Shot {
   mime: "image/jpeg" | "image/png";
   width: number | null;   // null when the image was not resized
   bytes: number;
+  source: "adb" | "stream";
+  ageMs: number | null;   // how stale the frame was, when it came from the viewer
+}
+
+/**
+ * The web viewer (web/server.ts) already runs a capture loop whenever a browser is
+ * watching, and serves the last frame from /shot.png. Taking a picture from there costs
+ * the phone nothing, which matters while droidread is scrolling a conversation: a second
+ * `adb exec-out screencap` competes with uiautomator on the same device and slows the very
+ * read you are trying to watch.
+ *
+ * Set DROIDREAD_STREAM_URL to the viewer's base URL to prefer it, e.g.
+ *   DROIDREAD_STREAM_URL=http://127.0.0.1:8791
+ * Unset, or unreachable, and this falls straight back to adb. The viewer's HTTPS twin is
+ * self-signed, so https:// is only accepted for loopback and private addresses.
+ */
+const STREAM_URL = process.env.DROIDREAD_STREAM_URL?.replace(/\/+$/, "");
+const STREAM_MAX_AGE_MS = Number(process.env.DROIDREAD_STREAM_MAX_AGE_MS ?? 1500);
+
+function isPrivateHost(host: string): boolean {
+  return host === "localhost" || host === "127.0.0.1" || host === "::1" ||
+    /^10\./.test(host) || /^192\.168\./.test(host) || /^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(host) ||
+    /^172\.(1[6-9]|2\d|3[01])\./.test(host);
+}
+
+async function fromStream(): Promise<Uint8Array | { error: string }> {
+  if (!STREAM_URL) return { error: "DROIDREAD_STREAM_URL not set" };
+  let u: URL;
+  try { u = new URL(`${STREAM_URL}/shot.png?max_age_ms=${STREAM_MAX_AGE_MS}`); }
+  catch { return { error: `DROIDREAD_STREAM_URL is not a URL: ${STREAM_URL}` }; }
+
+  // A self-signed certificate is fine on your own LAN and not fine anywhere else;
+  // refusing to skip verification for a public host keeps that distinction honest.
+  const selfSigned = u.protocol === "https:" && isPrivateHost(u.hostname);
+  try {
+    const res = await fetch(u, {
+      signal: AbortSignal.timeout(5000),
+      ...(selfSigned ? { tls: { rejectUnauthorized: false } } : {}),
+    } as RequestInit);
+    if (!res.ok) return { error: `viewer answered HTTP ${res.status}` };
+    const buf = new Uint8Array(await res.arrayBuffer());
+    if (!buf.byteLength) return { error: "viewer returned an empty frame" };
+    (buf as any).ageMs = Number(res.headers.get("x-frame-age-ms") ?? 0);
+    return buf;
+  } catch (e) {
+    return { error: (e as Error).message };
+  }
 }
 
 /** Raw PNG straight off the device. Binary — never routed through the string-returning adb(). */
@@ -45,9 +92,22 @@ async function haveFfmpeg(): Promise<boolean> {
  * Quality 6 on ffmpeg's 2-31 scale: text on a chat screen stays readable.
  */
 export async function screenshot(width = 540, quality = 6): Promise<Shot> {
-  const png = await screencap();
+  let source: "adb" | "stream" = "adb";
+  let ageMs: number | null = null;
+  let png: Uint8Array;
+
+  const streamed = await fromStream();
+  if (streamed instanceof Uint8Array) {
+    png = streamed;
+    source = "stream";
+    ageMs = (streamed as any).ageMs ?? 0;
+  } else {
+    if (STREAM_URL) process.stderr.write(`screenshot: viewer unusable (${streamed.error}) — falling back to adb\n`);
+    png = await screencap();
+  }
+
   if (width <= 0 || !(await haveFfmpeg())) {
-    return { data: png, mime: "image/png", width: null, bytes: png.byteLength };
+    return { data: png, mime: "image/png", width: null, bytes: png.byteLength, source, ageMs };
   }
 
   const p = Bun.spawn(
@@ -62,7 +122,7 @@ export async function screenshot(width = 540, quality = 6): Promise<Shot> {
   if (code !== 0 || out.byteLength === 0) {
     // Resizing is an optimisation; a failure here must not cost the caller their screenshot.
     process.stderr.write(`screenshot: ffmpeg resize failed, returning full PNG${err.trim() ? ` (${err.trim().split("\n")[0]})` : ""}\n`);
-    return { data: png, mime: "image/png", width: null, bytes: png.byteLength };
+    return { data: png, mime: "image/png", width: null, bytes: png.byteLength, source, ageMs };
   }
-  return { data: new Uint8Array(out), mime: "image/jpeg", width: Math.round(width), bytes: out.byteLength };
+  return { data: new Uint8Array(out), mime: "image/jpeg", width: Math.round(width), bytes: out.byteLength, source, ageMs };
 }

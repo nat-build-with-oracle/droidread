@@ -33,6 +33,7 @@ function usage(): never {
   droidread devices                         list adb devices
   droidread snapshot [--all] [--grep=RE]    accessibility tree of the current screen
   droidread screenshot [--width=540] [--out=F]  picture of the current screen
+  droidread web [--port=8791]               browser viewer + tap control (LAN/VPN, no auth)
   droidread read <chat> [--n=100]           read a conversation, index it
   droidread recap <chat>                    read only what's new since the last run
   droidread media <chat> [--cap=40]         download photos this chat has marked pending
@@ -70,13 +71,24 @@ switch (cmd) {
     break;
   }
 
+  case "web": {
+    // Runs in the foreground: it is a server, and the operator should see it and be able
+    // to stop it. Binds 0.0.0.0 with no authentication — LAN or VPN only.
+    const port = flag("port");
+    const proc = Bun.spawn(["bun", `${import.meta.dir}/../web/server.ts`], {
+      env: { ...process.env, ...(port ? { DROIDREAD_WEB_PORT: port } : {}) },
+      stdout: "inherit", stderr: "inherit", stdin: "inherit",
+    });
+    process.exit(await proc.exited);
+  }
+
   case "screenshot": {
     const { screenshot } = await import("./screen.ts");
     const shot = await screenshot(Number(flag("width", "540")), Number(flag("quality", "6")));
     const out = flag("out") ?? `${DATA_DIR}/screen-${new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19)}.${shot.mime === "image/jpeg" ? "jpg" : "png"}`;
     ensureDirs();
     await Bun.write(out, shot.data);
-    console.log(`${out}  (${shot.mime}, ${shot.width ? `${shot.width}px wide, ` : ""}${Math.round(shot.bytes / 1024)} KB)`);
+    console.log(`${out}  (${shot.mime}, ${shot.width ? `${shot.width}px wide, ` : ""}${Math.round(shot.bytes / 1024)} KB, ${shot.source === "stream" ? `via web viewer, frame ${shot.ageMs ?? 0}ms old` : "via adb screencap"})`);
     break;
   }
 

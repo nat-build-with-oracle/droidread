@@ -34,6 +34,8 @@ droidread read "Team Chat" --n=100   # read + index a conversation
 droidread recap "Team Chat"          # only what's new since last run
 droidread media "Team Chat"          # download photos marked pending
 droidread search "invoice"           # full-text search the index
+droidread screenshot                 # the picture, not the tree
+droidread web                        # browser viewer + tap control (LAN/VPN)
 droidread where                      # where your data lives
 ```
 
@@ -163,7 +165,8 @@ Register it with any MCP client, e.g.:
 | tool | touches phone? | notes |
 |---|---|---|
 | `droidread_devices` / `_where` / `_control_status` | no | reachability and config |
-| `droidread_snapshot` | read | screen as readable text |
+| `droidread_snapshot` | read | screen as readable text — cheap, and the one you act on |
+| `droidread_screenshot` | read | the picture; free when the web viewer is running |
 | `droidread_query` | read | find elements by selector, see what's clickable |
 | `droidread_search` / `_list` / `_media_pending` | no | index only, phone not involved |
 | `droidread_read` / `_recap` | read + scroll | slow; recap is much cheaper |
@@ -238,6 +241,31 @@ Restart=on-failure
 [Install]
 WantedBy=default.target
 ```
+
+## Watching it work: the web viewer
+
+`web/` serves the phone's actual screen to a browser, with click-to-tap and an inspector
+that draws every accessibility node as a box you can click. The tree is precise but blind;
+this is how you see a photo, a sticker, an unlabelled dialog, or a rendering glitch.
+
+```bash
+droidread web                     # http://0.0.0.0:8791, HTTPS twin on 8792
+```
+
+It also makes screenshots free. Point droidread at the viewer and `droidread_screenshot`
+takes the frame the capture loop already produced instead of spawning its own
+`adb exec-out screencap`, which otherwise competes with uiautomator and slows the very read
+you are watching:
+
+```bash
+DROIDREAD_STREAM_URL=http://127.0.0.1:8791
+```
+
+Unset or unreachable, it falls straight back to adb and says so.
+
+**The viewer has no authentication**, binds `0.0.0.0`, and lets anyone who can route to it
+tap your phone. That is deliberate for a LAN or VPN tool and wrong for anything public. It
+is not the MCP server; `mcp/http.ts` is the one with a token. See `web/README.md`.
 
 ## Device-specific by nature
 

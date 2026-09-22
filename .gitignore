@@ -18,3 +18,11 @@ ui-dump*.xml
 .env.local
 
 node_modules/
+
+# Generated on first run of the web viewer. A committed TLS private key is a published
+# private key.
+web/cert.pem
+web/key.pem
+
+# Third-party, fetched by the operator: Genymobile/scrcpy's server jar (Apache-2.0).
+web/scrcpy-server-v3.1
