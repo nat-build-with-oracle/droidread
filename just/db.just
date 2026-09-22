@@ -87,6 +87,21 @@ recent n='50': pull
        FROM messages m LEFT JOIN _unified_thread_name n ON n.thread_key = m.thread_key \
        WHERE m.text IS NOT NULL AND m.text != '' ORDER BY m.timestamp_ms DESC LIMIT {{n}}"
 
+# Message counts per day, bucketed into 3-hour windows (00-03, 03-06, ... 21-24).
+# Defaults to the thread this session has been backfilling; pass another name to reuse it.
+by-3h thread='Nonsense Matters CO.,LTD.': pull
+    #!/usr/bin/env bash
+    set -euo pipefail
+    sqlite3 -separator '  ' "{{out}}/current.db" "
+    WITH b AS (
+      SELECT date(m.timestamp_ms/1000,'unixepoch','localtime') AS day,
+             (CAST(strftime('%H', datetime(m.timestamp_ms/1000,'unixepoch','localtime')) AS INTEGER)/3)*3 AS h0
+      FROM messages m JOIN _unified_thread_name nm ON nm.thread_key = m.thread_key
+      WHERE nm.thread_name = '{{thread}}' AND m.text IS NOT NULL AND m.text != ''
+    )
+    SELECT day, printf('%02d:00-%02d:00', h0, h0+3) AS bucket, COUNT(*) AS n
+    FROM b GROUP BY day, h0 ORDER BY day, h0"
+
 # Full-text search across every message, every thread. Case-insensitive substring.
 search q: pull
     sqlite3 -separator '  ' "{{out}}/current.db" \

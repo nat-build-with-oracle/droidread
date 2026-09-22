@@ -25,6 +25,7 @@ mod db 'just/db.just'
 mod device 'just/device.just'
 mod frida 'just/frida.just'
 mod apps 'just/apps.just'
+mod bruin 'just/bruin.just'
 
 # List every recipe, including inside modules.
 default:
