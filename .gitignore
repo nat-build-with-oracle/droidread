@@ -1,0 +1,20 @@
+# Extracted chat content NEVER belongs in this repo.
+# By default it lives in ~/.droidread/ instead, which is outside the tree entirely —
+# these rules are the second line of defence, not the first.
+*.db
+*.db-shm
+*.db-wal
+media/
+data/
+*.jpeg
+*.jpg
+*.webp
+*.png
+*.mp4
+ui-dump*.xml
+
+# Credentials
+.env
+.env.local
+
+node_modules/
