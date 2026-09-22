@@ -14,5 +14,15 @@ find out what it changed to.
 | `tail.ts` | what is at the newest end, with dividers and messages interleaved? |
 | `photo-viewer.ts` | what controls exist in the photo viewer, and which one saves? |
 | `db-inspect.ts` | what does the index actually contain, and does it agree with itself? |
+| `db-state.ts` | one-line health: rows, dated coverage, anchors |
+| `anchor-shapes.ts` | every time-shaped node with full attributes — why did a divider get dropped? |
+| `settle-check.ts` | immediate dump vs settled dump — was a missing node a timing artefact? |
+| `overlap-scroll.ts` | does a small slow step reveal what a fast fling skips? (it does) |
+| `fix-photo-times.ts` | repair: set each photo's sent_at from its own caption |
+
+The last three were written in one session to chase a single bug — dividers a human could
+see on screen that the reader never returned. `settle-check` **disproved** the first
+hypothesis (timing); `overlap-scroll` **proved** the second (the fling skipped them).
+That is what these are for: testing a guess before building on it.
 
 Run them with `DROIDREAD_ADB` set if adb is not on PATH.

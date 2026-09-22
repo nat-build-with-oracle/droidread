@@ -26,7 +26,7 @@ for (let i = 0; i < SCREENS; i++) {
       s: `${m.sender}: ${m.text.replace(/\n/g, " ").slice(0, 45)}`,
     })),
   ].sort((a, b) => a.y - b.y));
-  await adb("shell", "input", "swipe", "540", "600", "540", "2000", "150");
+  await adb("shell", "input", "swipe", "540", "800", "540", "1400", "300");  // small step, no fling — see readThread
   await Bun.sleep(1200);
 }
 

@@ -123,3 +123,24 @@ export async function messagesSince(db: Client, app: string, chat: string, since
   });
   return { rows: inWindow.rows, undated: Number(undated.rows[0]!.n), total: Number(total.rows[0]!.n) };
 }
+
+export async function upsertAnchors(db: Client, app: string, chat: string, anchors: { raw: string; sentAt: string | null }[]): Promise<number> {
+  let n = 0;
+  for (const a of anchors) {
+    const res = await db.execute({
+      sql: `INSERT INTO anchors (app, chat, raw, sent_at) VALUES (?, ?, ?, ?)
+            ON CONFLICT (app, chat, raw) DO UPDATE SET sent_at = COALESCE(anchors.sent_at, excluded.sent_at)`,
+      args: [app, chat, a.raw, a.sentAt],
+    });
+    if (res.rowsAffected > 0) n++;
+  }
+  return n;
+}
+
+export async function listAnchors(db: Client, app: string, chat: string) {
+  const res = await db.execute({
+    sql: `SELECT raw, sent_at, first_seen FROM anchors WHERE app = ? AND chat = ? ORDER BY sent_at DESC, id DESC`,
+    args: [app, chat],
+  });
+  return res.rows;
+}

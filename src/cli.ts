@@ -7,7 +7,7 @@
 import { devices } from "./adb.ts";
 import { screenSnapshot } from "./snapshot.ts";
 import { openConversation, readThread, fetchMedia, REMOTE_MEDIA_DIR } from "./apps/messenger.ts";
-import { openDb, insertMessages, getExistingKeys, pendingMedia, markMediaDownloaded, search, listMessages, messagesSince } from "./db.ts";
+import { openDb, insertMessages, getExistingKeys, pendingMedia, markMediaDownloaded, search, listMessages, messagesSince, upsertAnchors, listAnchors } from "./db.ts";
 import { migrate } from "./migrate.ts";
 import { MEDIA_DIR, DATA_DIR, ensureDirs, loadEnvFile } from "./paths.ts";
 
@@ -38,6 +38,7 @@ function usage(): never {
   droidread search <query> [--limit=20]     full-text search the index
   droidread list <chat> [--n=50]            show indexed messages
   droidread since <chat> <YYYY-MM-DD HH:MM>  messages sent at or after a time
+  droidread anchors <chat>                  every timestamp divider ever seen, newest first
   droidread where                           show where data is stored
 
 Data lives in ${DATA_DIR} (override with DROIDREAD_HOME). Nothing is uploaded
@@ -77,11 +78,13 @@ switch (cmd) {
     if (known) console.error(`already indexed: ${known.size} messages`);
 
     await openConversation(chat);
-    const { messages, ending } = await readThread(chat, {
+    const { messages, anchors, ending } = await readThread(chat, {
       want: Number(flag("n", cmd === "recap" ? "0" : "100")),
       known,
     });
     const res = await insertMessages(d, APP, chat, messages);
+    const na = await upsertAnchors(d, APP, chat, anchors);
+    console.error(`anchors seen this pass: ${anchors.length} (${na} recorded)`);
     console.error(`${ending}`);
     console.log(`${messages.length} messages read · ${res.inserted} new, ${res.skipped} already indexed · ${res.dated} carried a timestamp`);
     for (const m of messages) console.log(`${m.kind === "photo" ? "[photo] " : ""}${m.sender}: ${m.text}`);
@@ -133,6 +136,15 @@ switch (cmd) {
       const when = r.sent_at ? `${String(r.sent_at).slice(0, 16)}  ` : "(no time)         ";
       console.log(`${when}${mark}${r.sender}: ${String(r.text).replace(/\n/g, " ").slice(0, 80)}`);
     }
+    break;
+  }
+
+  case "anchors": {
+    const chat = positional[0];
+    if (!chat) usage();
+    const rows = await listAnchors(await db(), APP, chat);
+    console.log(`${rows.length} anchors`);
+    for (const r of rows) console.log(`  ${String(r.sent_at ?? "unresolved").padEnd(20)} ${r.raw}`);
     break;
   }
 

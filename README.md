@@ -66,16 +66,36 @@ Two stop conditions are reliable, one is not:
 | `recap` — touched history already in the database | yes |
 | "reached the top of the conversation" | **no — see below** |
 
-### The top-detection caveat, stated honestly
+### How scrolling is done, and why it is slow on purpose
 
-"Reached the top" is inferred from *content no longer changing*, and a slow lazy-load
-fetch looks exactly like the end of history. Measured on one real conversation, three
-runs each confidently claimed "reached top" at **33**, **46** and **6** messages — where
-**88** were actually reachable.
+The reader scrolls **600px at 300ms** — about a third of a screen, with no fling
+momentum — and checks that every capture **overlaps** the previous one (shares at least
+one message or divider). Zero overlap means content was skipped; it backs up and re-reads.
 
-A real position signal (did the list actually *move*?) is the fix, and is not yet
-implemented. Until then: use `--n` or `recap`, and treat "reached top" as a claim rather
-than a fact.
+This replaced a 1400px fling, which was measured skipping whole regions between
+captures. Content-dedup hid the holes: the index looked fine, it was just missing
+things. Concretely, the fling returned 2 of one morning's 4 timestamp dividers; the
+small step returned all 4. The same overshoot is the likely cause of earlier runs
+"reaching the top" at 33, 46 and 6 messages where 88 were reachable.
+
+Every dump also waits for the tree to **settle** (`dumpSettled`) before being read.
+
+### Timestamps
+
+Messenger hides per-message send time behind "double-tap to see sent/receive date and
+time", but renders **dividers** between message clusters — `10:14`, `FRI AT 14:29`,
+`17 SEPT AT 12:06` — and those are readable. A divider timestamps the cluster **below**
+it (proved with photos, which state their own time; see `probes/divider-direction.ts`).
+
+Two consequences, stated plainly:
+
+- Timestamps are **cluster-granular**. Consecutive messages under one divider share it.
+- Relative labels (`FRI`, a bare time) only mean something relative to when they were
+  read, so the raw label is stored beside the resolved value and is never re-derived.
+
+Every divider is also indexed on its own in `anchors` — the timeline of a chat can be
+inspected directly (`droidread anchors <chat>`) independently of message assignment.
+Photos' own stated time always wins over inference.
 
 ## Photos: marked on read, downloaded on demand
 
@@ -184,7 +204,8 @@ service, and nothing is transmitted anywhere by default.
 ## Status
 
 Working: Messenger read / recap / photo marking + download, FTS search, local + Turso.
-Not done: LINE support, MCP server wrapper, the position-based top signal.
+Not done: LINE support; per-message (rather than per-cluster) timestamps, which Messenger
+does not expose without tapping each message.
 
 ## Licence
 

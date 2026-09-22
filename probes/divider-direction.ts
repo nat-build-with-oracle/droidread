@@ -33,6 +33,6 @@ for (let i = 0; i < SCREENS; i++) {
     ].sort((a, b) => a.y - b.y);
     for (const r of rows) console.log(`  y=${String(r.y).padStart(5)}  ${r.s}`);
   }
-  await adb("shell", "input", "swipe", "540", "600", "540", "2000", "120");
+  await adb("shell", "input", "swipe", "540", "800", "540", "1400", "300");  // small step, no fling — see readThread
   await Bun.sleep(1100);
 }

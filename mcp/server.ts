@@ -14,7 +14,7 @@ import { z } from "zod";
 import { devices, adb } from "../src/adb.ts";
 import { screenSnapshot } from "../src/snapshot.ts";
 import { openConversation, readThread, fetchMedia, REMOTE_MEDIA_DIR } from "../src/apps/messenger.ts";
-import { openDb, insertMessages, getExistingKeys, pendingMedia, markMediaDownloaded, search, listMessages, messagesSince } from "../src/db.ts";
+import { openDb, insertMessages, getExistingKeys, pendingMedia, markMediaDownloaded, search, listMessages, messagesSince, upsertAnchors, listAnchors } from "../src/db.ts";
 import { migrate } from "../src/migrate.ts";
 import { MEDIA_DIR, DATA_DIR, ensureDirs, loadEnvFile } from "../src/paths.ts";
 
@@ -74,8 +74,9 @@ server.tool(
   async ({ chat, n }) => {
     const d = await db();
     await openConversation(chat);
-    const { messages, ending } = await readThread(chat, { want: n ?? 100 });
+    const { messages, anchors, ending } = await readThread(chat, { want: n ?? 100 });
     const res = await insertMessages(d, APP, chat, messages);
+    await upsertAnchors(d, APP, chat, anchors);
     const body = messages.map((m) => `${m.sentAt ? String(m.sentAt).slice(0, 16) + "  " : ""}${m.kind === "photo" ? "[photo] " : ""}${m.sender}: ${m.text}`).join("\n");
     return text(`${messages.length} messages · ${res.inserted} new, ${res.skipped} already indexed · ${res.dated} dated\nending: ${ending}\n\n${body}`);
   },
@@ -89,8 +90,9 @@ server.tool(
     const d = await db();
     const known = await getExistingKeys(d, APP, chat);
     await openConversation(chat);
-    const { messages, ending } = await readThread(chat, { want: 0, known });
+    const { messages, anchors, ending } = await readThread(chat, { want: 0, known });
     const res = await insertMessages(d, APP, chat, messages);
+    await upsertAnchors(d, APP, chat, anchors);
     const body = messages.map((m) => `${m.kind === "photo" ? "[photo] " : ""}${m.sender}: ${m.text}`).join("\n");
     return text(`known before: ${known.size}\nnew: ${messages.length} (${res.inserted} inserted)\nending: ${ending}\n\n${body}`);
   },
@@ -133,6 +135,17 @@ server.tool(
       updated++;
     }
     return text(`saved ${saved.length}, db rows updated ${updated}\n${saved.map((s) => `${s.sender} ${s.when} -> ${s.file}`).join("\n")}`);
+  },
+);
+
+server.tool(
+  "droidread_anchors",
+  "Every timestamp divider ever seen in a chat, newest first. These are the anchors a message's time is derived from; inspect them to see which hours of a day have activity. Does not touch the phone.",
+  { chat: z.string().describe("substring of the conversation name") },
+  async ({ chat }) => {
+    const rows = await listAnchors(await db(), APP, chat);
+    if (!rows.length) return text("no anchors recorded yet — run a read first");
+    return text(`${rows.length} anchors\n` + rows.map((r) => `${String(r.sent_at ?? "unresolved").padEnd(20)} ${r.raw}`).join("\n"));
   },
 );
 

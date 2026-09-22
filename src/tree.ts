@@ -72,3 +72,34 @@ export function resolveOne(nodes: Node[], sel: Selector): Node {
   if (pick.length > 1) throw new Error(`${pick.length} matches for ${JSON.stringify(sel)} — refusing to guess`);
   return pick[0]!;
 }
+
+/**
+ * Dump, but only once the tree has stopped changing.
+ *
+ * WHY: a dump taken right after opening a conversation or after a scroll can be
+ * INCOMPLETE — the RecyclerView has not finished laying out, so nodes that are plainly
+ * visible on the glass are missing from the tree. Measured: the newest screen of a chat
+ * returned 2 items and zero timestamp dividers where a human could see 5 messages and
+ * three dividers (10:55, 10:14, 10:02). Reading from that dump silently produces wrong
+ * timestamps, which is worse than waiting a second.
+ *
+ * "Settled" = the same count of message-bearing nodes on `stableSamples` consecutive
+ * polls. Content counts are used rather than raw node counts because animations churn
+ * decorative nodes indefinitely.
+ */
+export async function dumpSettled(
+  countContent: (nodes: Node[]) => number,
+  opts: { timeoutMs?: number; pollMs?: number; stableSamples?: number } = {},
+): Promise<{ nodes: Node[]; settled: boolean }> {
+  const { timeoutMs = 6000, pollMs = 400, stableSamples = 2 } = opts;
+  const deadline = Date.now() + timeoutMs;
+  let last = -1, stable = 0, nodes: Node[] = [];
+  while (Date.now() < deadline) {
+    nodes = await dump();
+    const n = countContent(nodes);
+    if (n === last) { if (++stable >= stableSamples) return { nodes, settled: true }; }
+    else { stable = 0; last = n; }
+    await Bun.sleep(pollMs);
+  }
+  return { nodes, settled: false };
+}

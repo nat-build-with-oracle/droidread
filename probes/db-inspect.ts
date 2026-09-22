@@ -1,10 +1,11 @@
 #!/usr/bin/env bun
 // db-inspect.ts — what does the index contain, and does it agree with itself?
 //
-// The self-agreement check matters: a photo states its OWN time, so comparing that
-// against the divider-derived sent_at is a free correctness test on timestamp inference.
-// A mismatch means the divider assignment is wrong — which is exactly how the current
-// known bug was caught.
+// The photo self-check below compares each photo's own caption time against sent_at_raw.
+// Since "photo time wins" landed, those are identical by construction for any row written
+// afterwards, so a MISMATCH here now means one thing only: the row predates that change
+// and needs probes/fix-photo-times.ts. The LIVE correctness check for divider inference
+// is probes/divider-direction.ts, which compares against the phone, not the index.
 
 import { openDb } from "../src/db.ts";
 import { loadEnvFile, DATA_DIR } from "../src/paths.ts";
