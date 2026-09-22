@@ -26,3 +26,17 @@ hypothesis (timing); `overlap-scroll` **proved** the second (the fling skipped t
 That is what these are for: testing a guess before building on it.
 
 Run them with `DROIDREAD_ADB` set if adb is not on PATH.
+
+## scroll-cost.ts
+
+What one reader step actually costs, and whether it makes progress. Written after a
+150-message read spent ten minutes producing nothing, because `readThread` only printed
+when it finished.
+
+It reports, per step: whether the tree settled, how long the dump took, how many messages
+were visible, how many were new, and whether the screen overlapped the last one. Steady
+`new` with `overlap=yes` is healthy. Timeouts, or `new` stuck at 0, is the pathology.
+
+This is the probe that found the real number: a single `uiautomator dump` costs 2.4s on an
+SM-A146P and is perfectly stable across repeats. The reads were never looping — they were
+just long, and silent.

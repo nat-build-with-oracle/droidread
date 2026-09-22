@@ -17,7 +17,7 @@ await openConversation(chat);
 
 let prevKeys = new Set<string>();
 for (let i = 0; i < 6; i++) {
-  const nodes = await dumpConversation();
+  const { nodes } = await dumpConversation();
   const msgs = extract(nodes).sort((a, b) => a.y - b.y);
   const seps = extractSeparators(nodes).sort((a, b) => a.y - b.y);
   const keys = new Set(msgs.map((m) => `${m.sender}|${m.text}`));

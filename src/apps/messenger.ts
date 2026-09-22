@@ -98,10 +98,10 @@ export const onInbox = (nodes: Node[]) => match(nodes, { textContains: "Ask Meta
 const contentCount = (nodes: Node[]) => extract(nodes).length + extractSeparators(nodes).length;
 
 /** Dump the conversation only once it has finished laying out. */
-export async function dumpConversation(): Promise<Node[]> {
-  const { nodes, settled } = await dumpSettled(contentCount);
-  if (!settled) console.error("  warning: tree did not settle within timeout — this dump may be incomplete");
-  return nodes;
+export async function dumpConversation(): Promise<{ nodes: Node[]; settled: boolean; dumps: number }> {
+  const r = await dumpSettled(contentCount);
+  if (!r.settled) console.error(`  warning: tree did not settle after ${r.dumps} dumps — this one may be incomplete`);
+  return r;
 }
 
 /** Get from wherever Messenger resumed to a named conversation, or throw. */
@@ -139,10 +139,30 @@ export interface ReadOpts {
   hardCap?: number;       // safety ceiling on scroll iterations
   stagnantStop?: number;  // consecutive no-new-content scrolls before giving up
   known?: Set<string>;    // stop on contact with already-indexed history (recap mode)
+  maxMs?: number;         // wall-clock budget; a step costs SECONDS, so this is the real limit
+  onProgress?: (p: Progress) => void | Promise<void>;  // called after every screen
+}
+
+/**
+ * Reported after each screen so a long read is visible while it runs and survivable if
+ * it is killed. Both matter more than they sound: a step costs about 5 seconds, so 150
+ * messages is ~7 minutes of silence otherwise, and a run killed at minute 10 previously
+ * lost everything because nothing was written until the end.
+ */
+export interface Progress {
+  step: number;
+  collected: number;
+  want: number;
+  fresh: Msg[];          // messages first seen on THIS screen, newest-first
+  seps: Separator[];
+  settled: boolean;
+  dumps: number;
+  ms: number;
+  elapsedMs: number;
 }
 
 export interface Anchor { raw: string; sentAt: string | null }
-export interface ReadResult { messages: Msg[]; anchors: Anchor[]; ending: string; hitKnown: boolean }
+export interface ReadResult { messages: Msg[]; anchors: Anchor[]; ending: string; hitKnown: boolean; steps: number; elapsedMs: number }
 
 /**
  * Read a conversation by scrolling UP from the newest message.
@@ -158,12 +178,13 @@ export interface ReadResult { messages: Msg[]; anchors: Anchor[]; ending: string
  * dependable stop conditions are `want` and `known`.
  */
 export async function readThread(target: string, opts: ReadOpts = {}): Promise<ReadResult> {
-  const { want = 100, hardCap = 300, stagnantStop = 4, known } = opts;
+  const { want = 100, hardCap = 300, stagnantStop = 4, known, maxMs = 0, onProgress } = opts;
+  const startedAt = Date.now();
 
   const seen = new Set<string>();
   const screens: { msgs: Msg[]; seps: Separator[] }[] = [];
   const anchorsSeen = new Map<string, Anchor>();
-  let stagnant = 0, hitKnown = false, hitCap = true, gaps = 0;
+  let stagnant = 0, hitKnown = false, hitCap = true, gaps = 0, outOfTime = false, lastStep = 0;
   let screenKeys = new Set<string>();
   let screenSeps = new Set<string>();
 
@@ -171,7 +192,9 @@ export async function readThread(target: string, opts: ReadOpts = {}): Promise<R
   // still settling onto the newest message. Settle-wait applies to every screen, but
   // matters most here.
   for (let i = 0; i < hardCap; i++) {
-    let nodes = await dumpConversation();
+    lastStep = i + 1;
+    const stepStart = Date.now();
+    let { nodes, settled, dumps } = await dumpConversation();
     let msgs = extract(nodes).sort((a, b) => a.y - b.y);
     let seps = extractSeparators(nodes);
 
@@ -187,7 +210,7 @@ export async function readThread(target: string, opts: ReadOpts = {}): Promise<R
         console.error(`  continuity: no overlap after scroll — backing up`);
         await adb("shell", "input", "swipe", "540", "1300", "540", "900", "300");
         await Bun.sleep(400);
-        nodes = await dumpConversation();
+        ({ nodes, settled, dumps } = await dumpConversation());
         msgs = extract(nodes).sort((a, b) => a.y - b.y);
         seps = extractSeparators(nodes);
       }
@@ -206,8 +229,16 @@ export async function readThread(target: string, opts: ReadOpts = {}): Promise<R
     screenKeys = new Set(msgs.map((m) => `${m.sender}|${m.text}`));
     screenSeps = new Set(seps.map((sp) => sp.raw));
 
+    if (onProgress) {
+      await onProgress({
+        step: i, collected: seen.size, want, fresh, seps, settled, dumps,
+        ms: Date.now() - stepStart, elapsedMs: Date.now() - startedAt,
+      });
+    }
+
     if (want > 0 && seen.size >= want) { hitCap = false; break; }
     if (hitKnown) { hitCap = false; break; }
+    if (maxMs > 0 && Date.now() - startedAt >= maxMs) { hitCap = false; outOfTime = true; break; }
 
     stagnant = seen.size === before ? stagnant + 1 : 0;
     if (stagnant >= stagnantStop) { hitCap = false; break; }
@@ -253,10 +284,11 @@ export async function readThread(target: string, opts: ReadOpts = {}): Promise<R
   const anchors = [...anchorsSeen.values()].map((a) => ({ ...a, sentAt: resolveSeparator(a.raw, now) }));
   if (gaps > 0) console.error(`  continuity: ${gaps} scroll(s) needed a back-up — history may still have holes`);
   const ending = hitKnown ? "reached history already in the database"
+    : outOfTime ? `ran out of time after ${Math.round((Date.now() - startedAt) / 1000)}s — raise --max-ms or lower --n`
     : !hitCap && want > 0 && messages.length >= want ? `reached requested count (${want})`
     : !hitCap ? `content stopped changing after ${stagnantStop} scrolls — MAY be the top, see caveat`
     : `stopped at hard cap (${hardCap} scrolls)`;
-  return { messages, anchors, ending, hitKnown };
+  return { messages, anchors, ending, hitKnown, steps: lastStep, elapsedMs: Date.now() - startedAt };
 }
 
 async function listRemote(): Promise<Set<string>> {

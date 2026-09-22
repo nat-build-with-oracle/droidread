@@ -82,6 +82,34 @@ small step returned all 4. The same overshoot is the likely cause of earlier run
 
 Every dump also waits for the tree to **settle** (`dumpSettled`) before being read.
 
+### Device settings that matter
+
+Turn animations off on the phone. Messenger animates message rows, and a tree that keeps
+changing is a tree that never settles:
+
+```bash
+adb shell settings put global window_animation_scale 0.0
+adb shell settings put global transition_animation_scale 0.0
+adb shell settings put global animator_duration_scale 0.0
+```
+
+Restore with `1.0`. Also worth setting a long screen timeout, since a read takes minutes.
+
+### A step costs seconds, so reads take minutes
+
+Measured on an SM-A146P: one `uiautomator dump` is a steady **2.4 seconds**, and five
+consecutive dumps returned byte-identical 94-node trees. That single number explains a lot.
+
+It explains the old "tree did not settle" warnings, which were arithmetic rather than a
+restless screen: proving stability needed three dumps, 8000ms, inside a 6000ms budget that
+could never contain them. The defaults now assume a slow dump and a calm tree.
+
+It also explains why a 150-message read is roughly seven minutes. Since Thai messages are
+long, a screen holds 2-7 of them and a step yields about 2 new ones. So a read now reports
+after every screen and **writes as it goes** — a run killed at minute ten used to lose all
+ten minutes of work. `--max-ms` sets a wall-clock budget, which is the limit that actually
+binds.
+
 ### Timestamps
 
 Messenger hides per-message send time behind "double-tap to see sent/receive date and

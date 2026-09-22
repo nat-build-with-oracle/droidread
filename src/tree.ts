@@ -87,19 +87,35 @@ export function resolveOne(nodes: Node[], sel: Selector): Node {
  * polls. Content counts are used rather than raw node counts because animations churn
  * decorative nodes indefinitely.
  */
+/**
+ * Dump repeatedly until the amount of content stops changing.
+ *
+ * THE TIMEOUT MUST BE BIGGER THAN THE WORK. Measured on an SM-A146P, a single
+ * `uiautomator dump` costs a steady 2.4 SECONDS. Proving stability needs
+ * stableSamples+1 dumps, so the old defaults (6000ms budget, 2 stable samples,
+ * 400ms poll) needed 3 x 2400 + 2 x 400 = 8000ms and could never finish inside
+ * 6000ms. Every "tree did not settle" warning was that arithmetic, not a restless
+ * screen: five consecutive dumps returned byte-identical 94-node trees.
+ *
+ * So the defaults now assume a slow dump and a calm tree: one confirming sample,
+ * a short poll, and a budget with room for four dumps. With device animations
+ * disabled (window/transition/animator scale 0) the tree is stable immediately and
+ * this costs two dumps, about 5s, instead of three and about 8s.
+ */
 export async function dumpSettled(
   countContent: (nodes: Node[]) => number,
   opts: { timeoutMs?: number; pollMs?: number; stableSamples?: number } = {},
-): Promise<{ nodes: Node[]; settled: boolean }> {
-  const { timeoutMs = 6000, pollMs = 400, stableSamples = 2 } = opts;
+): Promise<{ nodes: Node[]; settled: boolean; dumps: number }> {
+  const { timeoutMs = 20000, pollMs = 150, stableSamples = 1 } = opts;
   const deadline = Date.now() + timeoutMs;
-  let last = -1, stable = 0, nodes: Node[] = [];
+  let last = -1, stable = 0, nodes: Node[] = [], dumps = 0;
   while (Date.now() < deadline) {
     nodes = await dump();
+    dumps++;
     const n = countContent(nodes);
-    if (n === last) { if (++stable >= stableSamples) return { nodes, settled: true }; }
+    if (n === last) { if (++stable >= stableSamples) return { nodes, settled: true, dumps }; }
     else { stable = 0; last = n; }
     await Bun.sleep(pollMs);
   }
-  return { nodes, settled: false };
+  return { nodes, settled: false, dumps };
 }

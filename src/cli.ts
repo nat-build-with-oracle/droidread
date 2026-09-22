@@ -34,7 +34,7 @@ function usage(): never {
   droidread snapshot [--all] [--grep=RE]    accessibility tree of the current screen
   droidread screenshot [--width=540] [--out=F]  picture of the current screen
   droidread web [--port=8791]               browser viewer + tap control (LAN/VPN, no auth)
-  droidread read <chat> [--n=100]           read a conversation, index it
+  droidread read <chat> [--n=100] [--max-ms=0]  read a conversation, index it
   droidread recap <chat>                    read only what's new since the last run
   droidread media <chat> [--cap=40]         download photos this chat has marked pending
   droidread search <query> [--limit=20]     full-text search the index
@@ -101,16 +101,34 @@ switch (cmd) {
     if (known) console.error(`already indexed: ${known.size} messages`);
 
     await openConversation(chat);
-    const { messages, anchors, ending } = await readThread(chat, {
+
+    // A step costs SECONDS (a single uiautomator dump is ~2.4s on an SM-A146P), so a
+    // 150-message read is minutes long. Two consequences, both handled here rather than
+    // left to the operator to discover: say something after every screen, and write as
+    // you go. A run killed at minute ten used to lose all ten minutes.
+    const t0 = Date.now();
+    const { messages, anchors, ending, steps, elapsedMs } = await readThread(chat, {
       want: Number(flag("n", cmd === "recap" ? "0" : "100")),
+      maxMs: Number(flag("max-ms", "0")),
       known,
+      async onProgress(p) {
+        if (p.fresh.length) await insertMessages(d, APP, chat, p.fresh);
+        const rate = p.collected / Math.max(1, (Date.now() - t0) / 1000);
+        const eta = p.want > 0 && rate > 0 ? `, eta ${Math.round((p.want - p.collected) / rate)}s` : "";
+        console.error(
+          `  step ${String(p.step + 1).padStart(3)}  ${String(p.collected).padStart(4)}` +
+          `${p.want > 0 ? `/${p.want}` : ""} msgs  +${p.fresh.length}  ${p.dumps} dumps ${p.ms}ms` +
+          `${p.settled ? "" : " UNSETTLED"}${eta}`,
+        );
+      },
     });
+
     const res = await insertMessages(d, APP, chat, messages);
     const na = await upsertAnchors(d, APP, chat, anchors);
     console.error(`anchors seen this pass: ${anchors.length} (${na} recorded)`);
-    console.error(`${ending}`);
+    console.error(`${steps} steps in ${Math.round(elapsedMs / 1000)}s — ${ending}`);
     console.log(`${messages.length} messages read · ${res.inserted} new, ${res.skipped} already indexed · ${res.dated} carried a timestamp`);
-    for (const m of messages) console.log(`${m.kind === "photo" ? "[photo] " : ""}${m.sender}: ${m.text}`);
+    for (const m of messages) console.log(`${m.sentAt ? String(m.sentAt).slice(0, 16) + "  " : ""}${m.kind === "photo" ? "[photo] " : ""}${m.sender}: ${m.text}`);
     break;
   }
 
