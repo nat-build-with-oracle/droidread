@@ -163,6 +163,12 @@ const PAGE = `<!doctype html>
 <title>droidread — indexed data</title>
 <style>
   :root {
+    /* This page is dark-only, not dark-as-one-of-two-themes — so color-scheme is a plain
+       dark, not "light dark". Declared and left undeclared were tried both: undeclared, a
+       browser renders every NATIVE control in light mode regardless of the page's own
+       colours, which is exactly the white scrollbar and light form-control chrome seen
+       sitting on top of this dark page in a live screenshot. */
+    color-scheme: dark;
     --bg: #0a0a0a; --sidebar: #18191a; --panel: #18191a; --hover: #2f3031; --active: #3a3b3c;
     --border: #2f3031; --text: #e4e6eb; --dim: #b0b3b8; --faint: #65676b;
     --bubble-in: #3e4042; --bubble-me: #0b93f6; --pill: #3a3b3c;
@@ -176,6 +182,15 @@ const PAGE = `<!doctype html>
   body { display: flex; background: var(--bg); color: var(--text);
          font: 15px/1.4 -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; }
   a, button, input { font: inherit; color: inherit; }
+
+  /* color-scheme:dark gets WebKit/Blink most of the way on its own, but a thin, explicitly
+     dark thumb reads calmer than the still-fairly-light default dark scrollbar, and Firefox
+     needs scrollbar-color stated directly — color-scheme alone does not reach it there. */
+  aside, #scroller { scrollbar-color: var(--border) transparent; scrollbar-width: thin; }
+  aside::-webkit-scrollbar, #scroller::-webkit-scrollbar { width: 10px; }
+  aside::-webkit-scrollbar-track, #scroller::-webkit-scrollbar-track { background: transparent; }
+  aside::-webkit-scrollbar-thumb, #scroller::-webkit-scrollbar-thumb { background: var(--border); border-radius: 6px; border: 2px solid var(--bg); }
+  aside::-webkit-scrollbar-thumb:hover, #scroller::-webkit-scrollbar-thumb:hover { background: var(--hover); }
 
   /* avatar: a colour-hashed initial circle, since no real avatar image exists */
   .avatar { width: 36px; height: 36px; border-radius: 50%; flex: none; display: flex;
