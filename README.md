@@ -42,8 +42,18 @@ droidread where                      # where your data lives
 **`~/.droidread/`** — outside this repo entirely, so chat content and photos cannot be
 committed by accident. `.gitignore` here is a second line of defence, not the first.
 
-Nothing leaves your machine unless *you* set `TURSO_DATABASE_URL` / `TURSO_AUTH_TOKEN`
-(see `.env.example`), which points the same code at your own cloud database.
+Nothing leaves your machine unless *you* set `TURSO_DATABASE_URL` / `TURSO_AUTH_TOKEN`,
+which points the same code at your own cloud database.
+
+Put those in **`~/.droidread/.env`** (mode `600`) rather than in your MCP client's config:
+
+```bash
+install -m 600 .env.example ~/.droidread/.env   # then edit it
+```
+
+Both the CLI and the MCP server load that file at startup, and real environment
+variables always win over it. This matters because an MCP client's config file is
+typically mode **644** — a Turso auth token pasted in there is world-readable.
 
 ## How reading works
 

@@ -16,7 +16,9 @@ import { screenSnapshot } from "../src/snapshot.ts";
 import { openConversation, readThread, fetchMedia, REMOTE_MEDIA_DIR } from "../src/apps/messenger.ts";
 import { openDb, insertMessages, getExistingKeys, pendingMedia, markMediaDownloaded, search, listMessages } from "../src/db.ts";
 import { migrate } from "../src/migrate.ts";
-import { MEDIA_DIR, DATA_DIR, ensureDirs } from "../src/paths.ts";
+import { MEDIA_DIR, DATA_DIR, ensureDirs, loadEnvFile } from "../src/paths.ts";
+
+loadEnvFile();  // ~/.droidread/.env, before any client is constructed
 import { query, tapSelector, swipe, pressKey, typeText, assertControlAllowed } from "../src/control.ts";
 import type { Selector } from "../src/tree.ts";
 

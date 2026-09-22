@@ -9,7 +9,9 @@ import { screenSnapshot } from "./snapshot.ts";
 import { openConversation, readThread, fetchMedia, REMOTE_MEDIA_DIR } from "./apps/messenger.ts";
 import { openDb, insertMessages, getExistingKeys, pendingMedia, markMediaDownloaded, search, listMessages } from "./db.ts";
 import { migrate } from "./migrate.ts";
-import { MEDIA_DIR, DATA_DIR, ensureDirs } from "./paths.ts";
+import { MEDIA_DIR, DATA_DIR, ensureDirs, loadEnvFile } from "./paths.ts";
+
+loadEnvFile();
 import { adb } from "./adb.ts";
 
 const APP = "messenger";
