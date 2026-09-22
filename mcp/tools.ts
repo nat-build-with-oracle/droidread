@@ -15,8 +15,9 @@ import { z } from "zod";
 
 import { devices } from "../src/adb.ts";
 import { screenSnapshot, refCount } from "../src/snapshot.ts";
-import { openConversation, readScreen, fetchMedia, REMOTE_MEDIA_DIR } from "../src/apps/messenger.ts";
-import { openDb, insertMessages, getExistingKeys, pendingMedia, markMediaDownloaded, search, listMessages, messagesSince, upsertAnchors, listAnchors } from "../src/db.ts";
+import { isEnabled, setEnabled } from "../src/plugins.ts";
+import { PLUGINS } from "./apps.ts";
+import { openDb, search, listMessages, messagesSince, listAnchors } from "../src/db.ts";
 import { migrate } from "../src/migrate.ts";
 import { MEDIA_DIR, DATA_DIR, ensureDirs } from "../src/paths.ts";
 import { screenshot } from "../src/screen.ts";
@@ -144,86 +145,6 @@ export function buildServer(): McpServer {
       const via = shot.source === "stream" ? `via web viewer, frame ${shot.ageMs ?? 0}ms old` : "via adb screencap";
       return image(shot.data, shot.mime, `phone screen · ${shot.mime} · ${shot.width ? `${shot.width}px wide · ` : "original size · "}${kb} KB · ${via}`);
     },
-  );
-
-  server.tool(
-    "droidread_open_chat",
-    "Open a Messenger conversation by name and stop there. Does NOT read or scroll — pair it with droidread_read_screen and droidread_swipe, and decide for yourself when to stop.",
-    { chat: z.string().describe("substring of the conversation name") },
-    ({ chat }) => withDevice("droidread_open_chat", async () => {
-      await openConversation(chat);
-      return text(`opened "${chat}" — now use droidread_read_screen, then droidread_swipe direction=up for older messages`);
-    }),
-  );
-
-  server.tool(
-    "droidread_read_screen",
-    "Index the messages VISIBLE RIGHT NOW in the open conversation, and report which are new. Does not scroll. Takes about 5 seconds. THIS IS THE LOOP PRIMITIVE: call it, then droidread_swipe direction=up, then call it again, and stop when you have what you need or when 'new' reaches 0. Driving the loop yourself means you see every screen, can stop early, and nothing is lost if you change your mind — unlike a tool that scrolls for five minutes and returns once.",
-    { chat: z.string().describe("conversation name to index these messages under") },
-    ({ chat }) => withDevice("droidread_read_screen", async () => {
-      const d = await db();
-      const r = await readScreen();
-      if (r.onInboxNow) return text("not in a conversation — you are on the inbox. Use droidread_open_chat first.");
-
-      const before = await getExistingKeys(d, APP, chat);
-      const fresh = r.messages.filter((m) => !before.has(`${m.sender}|${m.text}`));
-      const res = await insertMessages(d, APP, chat, r.messages);
-      const na = await upsertAnchors(d, APP, chat, r.anchors);
-
-      const body = r.messages.map((m) => {
-        const mark = before.has(`${m.sender}|${m.text}`) ? "  " : "+ ";
-        return `${mark}${m.sentAt ? String(m.sentAt).slice(0, 16) + "  " : ""}${m.kind === "photo" ? "[photo] " : ""}${m.sender}: ${m.text}`;
-      }).join("\n");
-
-      const hints = [
-        `${r.messages.length} on screen · ${fresh.length} new (${res.inserted} inserted) · ${r.anchors.length} time dividers (${na} new)`,
-        r.settled ? "" : `tree did not settle after ${r.dumps} dumps — this screen may be incomplete`,
-        r.atTop ? "START OF CONVERSATION is visible — no more history above" : "",
-        fresh.length === 0 ? "nothing new here; one more swipe up, and if it is still 0 you have reached indexed history" : "",
-      ].filter(Boolean).join("\n");
-
-      return text(`${hints}\n\n${body}`);
-    }),
-  );
-
-  server.tool(
-    "droidread_media_pending",
-    "List photos that are marked in the index but not yet downloaded. Read-only, does not touch the phone.",
-    { chat: z.string().describe("substring of the conversation name") },
-    async ({ chat }) => {
-      const pend = await pendingMedia(await db(), APP, chat);
-      if (!pend.length) return text("no photos pending download");
-      return text(pend.map((r) => `#${r.id} ${r.sender} ${r.media_when}`).join("\n"));
-    },
-  );
-
-  server.tool(
-    "droidread_media_fetch",
-    "Download photos this chat has marked pending. VERY SLOW: each photo costs a tap/Save/back cycle of roughly 8 seconds and drives the real Messenger UI. Use a small cap. Waits if another caller is using the phone.",
-    { chat: z.string().describe("substring of the conversation name"),
-      cap: z.number().optional().describe("max photos to fetch this run (default 10)") },
-    ({ chat, cap }) => withDevice("droidread_media_fetch", async () => {
-      const d = await db();
-      const pend = await pendingMedia(d, APP, chat);
-      if (!pend.length) return text("no photos pending download");
-      const refToId = new Map(pend.map((r) => [String(r.media_ref), Number(r.id)]));
-
-      await openConversation(chat);
-      const saved = await fetchMedia({ wanted: new Set(refToId.keys()), cap: cap ?? 10 });
-
-      ensureDirs();
-      const pull = Bun.spawn([process.env.DROIDREAD_ADB ?? "adb", "pull", REMOTE_MEDIA_DIR, MEDIA_DIR], { stdout: "pipe", stderr: "pipe" });
-      await pull.exited;
-
-      let updated = 0;
-      for (const s of saved) {
-        const id = refToId.get(s.ref);
-        if (!id) continue;
-        await markMediaDownloaded(d, id, `${MEDIA_DIR}/Messenger/${s.file}`);
-        updated++;
-      }
-      return text(`saved ${saved.length}, db rows updated ${updated}\n${saved.map((s) => `${s.sender} ${s.when} -> ${s.file}`).join("\n")}`);
-    }),
   );
 
   server.tool(
@@ -361,6 +282,60 @@ export function buildServer(): McpServer {
       try { assertControlAllowed(); return text("control ENABLED (DROIDREAD_ALLOW_CONTROL=1)"); }
       catch (e) { return text(`control DISABLED — ${(e as Error).message}`); }
     },
+  );
+
+  // -------------------------------------------------------------------------
+  // App packs. Registered either way, then disabled if the operator switched them
+  // off — the SDK tells the client the list changed, so a toggle takes effect at once.
+  // -------------------------------------------------------------------------
+  const packs = PLUGINS.map((plugin) => {
+    const tools = plugin.register(server, withDevice);
+    const on = isEnabled(plugin.meta.id);
+    if (!on) for (const t of tools) t.disable();
+    return { plugin, tools, on };
+  });
+
+  const describePack = (p: typeof packs[number]) =>
+    `${p.on ? "on " : "off"}  ${p.plugin.meta.id.padEnd(10)} ${p.plugin.meta.name}\n` +
+    `     ${p.plugin.meta.summary}\n` +
+    `     packages: ${p.plugin.meta.packages.join(", ")}\n` +
+    `     tools: ${p.tools.length}  ·  ground truth: ${p.plugin.meta.verified}`;
+
+  server.tool(
+    "droidread_apps",
+    "List the app packs and whether each is switched on. A pack is one app's tools — Messenger, LINE — on top of the generic Android core. Switching one off hides its tools so they stop costing context.",
+    {},
+    async () => text(
+      `${packs.filter((p) => p.on).length} of ${packs.length} packs on\n\n` +
+      packs.map(describePack).join("\n\n") +
+      `\n\nToggle with droidread_app_enable / droidread_app_disable. The choice is remembered.`,
+    ),
+  );
+
+  const toggle = (id: string, on: boolean) => {
+    const pack = packs.find((p) => p.plugin.meta.id === id);
+    if (!pack) {
+      return text(`no pack called ${JSON.stringify(id)} — available: ${packs.map((p) => p.plugin.meta.id).join(", ")}`);
+    }
+    if (pack.on === on) return text(`${id} is already ${on ? "on" : "off"}`);
+    for (const t of pack.tools) (on ? t.enable() : t.disable());
+    pack.on = on;
+    setEnabled(id, on);   // remembered in ~/.droidread/plugins.json
+    return text(`${id} ${on ? "enabled" : "disabled"} — ${pack.tools.length} tools ${on ? "added" : "hidden"}, remembered for next time`);
+  };
+
+  server.tool(
+    "droidread_app_enable",
+    "Switch an app pack on, adding its tools immediately. The choice is remembered across restarts.",
+    { app: z.string().describe("pack id, e.g. 'messenger' or 'line'") },
+    async ({ app }) => toggle(app, true),
+  );
+
+  server.tool(
+    "droidread_app_disable",
+    "Switch an app pack off, hiding its tools so they stop costing context. The choice is remembered across restarts.",
+    { app: z.string().describe("pack id, e.g. 'messenger' or 'line'") },
+    async ({ app }) => toggle(app, false),
   );
 
   return server;

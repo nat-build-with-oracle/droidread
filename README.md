@@ -202,6 +202,37 @@ Register it with any MCP client, e.g.:
 | `droidread_media_fetch` | **writes UI** | ~8s per photo |
 | `droidread_tap` / `_swipe` / `_key` / `_type` / `_open` | **writes UI** | opt-in, see below |
 
+### App packs: a generic core, plus per-app bundles
+
+The core tool set is generic Android — look at the screen, tap by ref, swipe, type, open
+an app. Everything beyond that is a **pack**: one app's bundle of tools, switched on or off
+as a unit and remembered in `~/.droidread/plugins.json`.
+
+```
+droidread_apps                              # what exists, and what is on
+droidread_app_disable  app="line"           # 3 tools hidden, at once
+droidread_app_enable   app="messenger"      # 4 tools added, at once
+```
+
+| pack | package | tools |
+|---|---|---|
+| `messenger` | `com.facebook.orca` | `messenger_open_chat`, `_read_screen`, `_media_pending`, `_media_fetch` |
+| `line` | `jp.naver.line.android` | `line_chats`, `line_open_chat`, `line_read_screen` |
+
+Two reasons packs exist. Tools cost context, and a model that will never touch LINE should
+not carry LINE's tools in every request. And selectors are app-specific and
+version-fragile, so keeping each app's knowledge in one pack means a broken app breaks one
+pack, loudly, rather than the whole server.
+
+Toggling takes effect immediately. The MCP SDK enables and disables registered tools at
+runtime and tells the client the list changed, so no restart is needed. Measured: 26 tools
+with both packs on, 19 with both off, and the choice survives a restart.
+
+LINE is worth a note. It **keeps its resource-ids**, so its selectors are ids rather than
+content-descriptions — and the message text is on `chat_ui_message_text`, not
+`chat_ui_row_text_message`, which is an empty container. Filter on the row id and you get
+zero messages from a screen that plainly has them, with no error saying why.
+
 ### No tool owns a long loop
 
 Reading a conversation is a scroll loop that runs for minutes. The CLI owns that loop,
