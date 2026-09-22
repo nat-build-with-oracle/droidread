@@ -34,6 +34,7 @@ function usage(): never {
   droidread snapshot [--all] [--grep=RE]    accessibility tree of the current screen
   droidread screenshot [--width=540] [--out=F]  picture of the current screen
   droidread web [--port=8791]               browser viewer + tap control (LAN/VPN, no auth)
+  droidread data [--port=8793]              browse indexed data + photos (read-only, no adb)
   droidread open <screen|package>           open a Settings screen or app (needs control)
   droidread read <chat> [--n=100] [--max-ms=0]  read a conversation, index it
   droidread recap <chat>                    read only what's new since the last run
@@ -78,6 +79,17 @@ switch (cmd) {
     const port = flag("port");
     const proc = Bun.spawn(["bun", `${import.meta.dir}/../web/server.ts`], {
       env: { ...process.env, ...(port ? { DROIDREAD_WEB_PORT: port } : {}) },
+      stdout: "inherit", stderr: "inherit", stdin: "inherit",
+    });
+    process.exit(await proc.exited);
+  }
+
+  case "data": {
+    // Also runs in the foreground, also a server. No DROIDREAD_ADB needed — this only
+    // ever reads the database and files already on disk, never the phone.
+    const port = flag("port");
+    const proc = Bun.spawn(["bun", `${import.meta.dir}/../web/data.ts`], {
+      env: { ...process.env, ...(port ? { DROIDREAD_DATA_PORT: port } : {}) },
       stdout: "inherit", stderr: "inherit", stdin: "inherit",
     });
     process.exit(await proc.exited);
