@@ -17,7 +17,8 @@
 import { McpServer, type RegisteredTool } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 
-import { openConversation, readScreen, fetchMedia, REMOTE_MEDIA_DIR } from "../src/apps/messenger.ts";
+import { openConversation, openChatOnScreen, readScreen, fetchMedia, REMOTE_MEDIA_DIR, MESSENGER_PACKAGE } from "../src/apps/messenger.ts";
+import { restartApp } from "../src/control.ts";
 import { openLineChat, readLineScreen, listChats, LINE_PACKAGE } from "../src/apps/line.ts";
 import { openDb, insertMessages, getExistingKeys, pendingMedia, markMediaDownloaded, upsertAnchors } from "../src/db.ts";
 import { migrate } from "../src/migrate.ts";
@@ -53,17 +54,19 @@ const messenger: AppPlugin = {
     const out: RegisteredTool[] = [];
     out.push(server.tool(
       "messenger_open_chat",
-      "Open a Messenger conversation by name and stop there. Restarts Messenger first so it begins at the inbox rather than wherever it was left — pass fresh:false to skip that when the app is already on the inbox. Does NOT read or scroll: pair with messenger_read_screen and droidread_swipe, and decide for yourself when to stop. Requires DROIDREAD_ALLOW_CONTROL=1 when fresh is true.",
-      { chat: z.string().describe("substring of the conversation name; use the name exactly as it appears, including Thai script"),
-        fresh: z.boolean().optional().describe("restart the app first (default true)") },
+      "Tap a Messenger conversation if it is on the CURRENT inbox screen. Never scrolls: if the name is not visible it tells you which chats ARE, so you can droidread_swipe (down = older) and call again — or notice the name is spelled differently. Ambiguous names are refused, not guessed. Pass fresh:true to force-stop and relaunch Messenger first, which lands on the inbox top. Returns the screen it lands on.",
+      { chat: z.string().describe("substring of the conversation name, exactly as Messenger shows it"),
+        fresh: z.boolean().optional().describe("restart Messenger first so the inbox starts at the top (default false)") },
       ({ chat, fresh }) => withDevice("messenger_open_chat", async () => {
-        await openConversation(chat, { fresh: fresh ?? true });
-        // Show the screen it landed on: the whole failure mode worth catching here is
-        // opening the WRONG conversation, and the header makes that obvious at a glance.
+        if (fresh) await restartApp(MESSENGER_PACKAGE);
+        const r = await openChatOnScreen(chat);
+        const seen = r.visible.length ? `visible on this screen: ${r.visible.join(" · ")}` : "no chat rows on this screen";
+        if (r.ambiguous) return text(`${r.ambiguous.length} chats match ${JSON.stringify(chat)}: ${r.ambiguous.join(" · ")} — give more of the name.\n${seen}`);
+        if (!r.opened) return text(`${JSON.stringify(chat)} is not on this screen.\n${seen}\nSwipe down for older chats and call again, or check the spelling against the names above.`);
         let screen = "";
         try { screen = `\n\n--- screen now ---\n${await screenSnapshot({ refs: true })}`; }
         catch (e) { screen = `\n\n(could not snapshot: ${(e as Error).message})`; }
-        return text(`opened "${chat}" — now use messenger_read_screen, then droidread_swipe direction=up for older messages${screen}`);
+        return text(`opened "${r.matched}" — now messenger_read_screen, then droidread_swipe direction=up for older messages${screen}`);
       }),
     ));
 

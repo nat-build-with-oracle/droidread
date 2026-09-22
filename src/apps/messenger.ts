@@ -431,3 +431,66 @@ export async function readScreen(): Promise<ScreenRead> {
     onInboxNow: onInbox(nodes),
   };
 }
+
+// ---------------------------------------------------------------------------
+// Opening a chat WITHOUT a hidden loop.
+//
+// openConversation() above scrolls the inbox up to ten times hunting for a name. That is a
+// loop inside a tool: the caller cannot see the screens it rejected, cannot tell a
+// misspelled name from a chat that is simply further down, and cannot stop it. Exactly the
+// failure this project keeps removing.
+//
+// These two are the primitives instead. Look at what is on screen; tap it if it is there;
+// otherwise say what IS there and let the caller decide to swipe. Finding a chat becomes
+// visible, steerable work rather than a black box.
+// ---------------------------------------------------------------------------
+
+const CHAT_ROW_SUFFIXES = [/, \d+ new messages?$/i, /, \d+ unread messages?$/i];
+
+/** Chat rows on the current inbox screen, newest first, as Messenger labels them. */
+export function chatRowsOnScreen(nodes: Node[]): { name: string; label: string; x: number; y: number }[] {
+  const rows: { name: string; label: string; x: number; y: number }[] = [];
+  for (const n of nodes) {
+    if (!n.clickable || !n.desc) continue;
+    // A chat row's description starts with the conversation name and continues with the
+    // preview. Tabs, composer buttons and story tiles are excluded by the shape of theirs.
+    if (/^(New message|Ask Meta AI|Meta AI|Create story|Open |Chats,|People tab|Notifications,|Menu tab|Facebook app|Your (note|story))/i.test(n.desc)) continue;
+    if (!n.desc.includes(",") && !CHAT_ROW_SUFFIXES.some((re) => re.test(n.desc))) continue;
+    const name = n.desc.split(",")[0]!.trim();
+    if (!name) continue;
+    rows.push({ name, label: n.desc, x: n.x, y: n.y });
+  }
+  return rows;
+}
+
+export interface ChatLookup {
+  opened: boolean;
+  matched?: string;
+  visible: string[];
+  ambiguous?: string[];
+}
+
+/**
+ * Tap a conversation if it is on the CURRENT screen. Never scrolls.
+ * Ambiguity is refused rather than guessed, same rule as everywhere else.
+ */
+export async function openChatOnScreen(target: string): Promise<ChatLookup> {
+  const nodes = await dump();
+  if (!onInbox(nodes)) throw new Error("not on the Messenger inbox — restart the app or press back first");
+
+  const rows = chatRowsOnScreen(nodes);
+  const needle = target.trim().toLowerCase();
+  const hits = rows.filter((r) => r.label.toLowerCase().includes(needle));
+
+  if (hits.length === 0) return { opened: false, visible: rows.map((r) => r.name) };
+  if (hits.length > 1) {
+    const names = [...new Set(hits.map((r) => r.name))];
+    if (names.length > 1) return { opened: false, visible: rows.map((r) => r.name), ambiguous: names };
+  }
+
+  const hit = hits[0]!;
+  await tap(hit.x, hit.y);
+  await Bun.sleep(2500);
+  if (onInbox(await dump())) throw new Error("tap did not open a conversation — the list may have scrolled between looking and tapping");
+  return { opened: true, matched: hit.name, visible: rows.map((r) => r.name) };
+}
