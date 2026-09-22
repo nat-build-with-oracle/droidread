@@ -105,13 +105,27 @@ export async function dumpConversation(): Promise<{ nodes: Node[]; settled: bool
 }
 
 /** Get from wherever Messenger resumed to a named conversation, or throw. */
-export async function openConversation(target: string): Promise<void> {
+export const MESSENGER_PACKAGE = "com.facebook.orca";
+
+export async function openConversation(target: string, opts: { fresh?: boolean } = {}): Promise<void> {
+  const { fresh = true } = opts;
   await wake();
 
-  // Messenger resumes into the last conversation, not the inbox. Exactly ONE back per
-  // attempt — a second press leaves the app entirely.
+  // Messenger resumes into the last conversation, not the inbox, and backing out means
+  // guessing how many presses that takes — one too many leaves the app. A restart makes
+  // the starting state a fact rather than an inference, which matters most when the
+  // previous run was interrupted and left the app somewhere unexpected.
+  //
+  // fresh:false keeps the old back-out behaviour for when the app is known to be on the
+  // inbox already and the extra few seconds are not worth paying.
+  if (fresh) {
+    const { restartApp } = await import("../control.ts");
+    await restartApp(MESSENGER_PACKAGE);
+  }
+
   for (let i = 0; i < 5; i++) {
     if (onInbox(await dump())) break;
+    // Exactly ONE back per attempt — a second press leaves the app entirely.
     await back();
     await Bun.sleep(1200);
   }

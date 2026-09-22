@@ -208,3 +208,23 @@ export async function typeIntoRef(ref: string, s: string): Promise<FoundEl> {
   await typeText(s);
   return describe(n);
 }
+
+/**
+ * Force-stop an app and launch it again, so it starts from its own front door.
+ *
+ * WHY THIS BEATS PRESSING BACK: an app resumes wherever it was left, which may be three
+ * screens deep, in a search box, or in a conversation. Backing out means guessing how many
+ * presses that takes, and one press too many leaves the app entirely. A restart makes the
+ * starting state a fact instead of an inference.
+ *
+ * The cost is a few seconds and losing whatever was on screen. Nothing is deleted: this is
+ * the same as swiping the app away from recents.
+ */
+export async function restartApp(pkg: string): Promise<void> {
+  assertControlAllowed();
+  await adb("shell", "am", "force-stop", pkg);
+  await Bun.sleep(600);
+  const out = await adb("shell", "monkey", "-p", pkg, "-c", "android.intent.category.LAUNCHER", "1");
+  if (/No activities found|Error/i.test(out)) throw new Error(`cannot launch ${pkg}: ${out.trim().split("\n")[0]}`);
+  await Bun.sleep(3500);
+}

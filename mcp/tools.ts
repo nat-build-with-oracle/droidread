@@ -21,7 +21,7 @@ import { openDb, search, listMessages, messagesSince, listAnchors } from "../src
 import { migrate } from "../src/migrate.ts";
 import { MEDIA_DIR, DATA_DIR, ensureDirs } from "../src/paths.ts";
 import { screenshot } from "../src/screen.ts";
-import { query, tapSelector, tapRef, typeIntoRef, swipe, pressKey, typeText, assertControlAllowed, openScreen, currentFocus, SETTINGS_SCREENS } from "../src/control.ts";
+import { query, tapSelector, tapRef, typeIntoRef, swipe, pressKey, typeText, assertControlAllowed, openScreen, currentFocus, restartApp, SETTINGS_SCREENS } from "../src/control.ts";
 import type { Selector } from "../src/tree.ts";
 
 const APP = "messenger";
@@ -32,6 +32,28 @@ const image = (data: Uint8Array, mimeType: string, caption: string) => ({
     { type: "text" as const, text: caption },
   ],
 });
+/**
+ * Every action returns the screen it produced.
+ *
+ * Acting blind and then looking is two round trips, and the gap between them is where
+ * mistakes hide: the tap landed somewhere unexpected and nothing said so. Returning a
+ * fresh snapshot with the receipt means the next decision is made from what is actually
+ * on screen, with usable refs, and it halves the calls.
+ *
+ * Refs from the returned snapshot are the current ones — the older set is now stale.
+ */
+async function withScreen(receipt: string, want = true): Promise<string> {
+  if (!want) return receipt;
+  try {
+    return `${receipt}\n\n--- screen now ---\n${await screenSnapshot({ refs: true })}`;
+  } catch (e) {
+    // A failed look must not turn a successful action into an error.
+    return `${receipt}\n\n(could not snapshot: ${(e as Error).message})`;
+  }
+}
+
+const snapshotOpt = { snapshot: z.boolean().optional().describe("return the screen after acting (default true)") };
+
 const log = (s: string) => process.stderr.write(`[droidread ${new Date().toISOString().slice(11, 19)}] ${s}\n`);
 
 async function db() {
@@ -220,10 +242,11 @@ export function buildServer(): McpServer {
   server.tool(
     "droidread_tap",
     "Tap an element, by ref from the last snapshot (preferred) or by selector. A ref is re-found in a FRESH dump by its identity before tapping, so a scroll between snapshot and tap is caught instead of silently hitting whatever moved into that spot. Refuses on zero or multiple matches rather than guessing. Requires DROIDREAD_ALLOW_CONTROL=1.",
-    { ref: z.string().optional().describe("handle from droidread_snapshot, e.g. 'e12' — preferred"), ...selectorShape },
-    ({ ref, ...args }) => withDevice("droidread_tap", async () => {
+    { ref: z.string().optional().describe("handle from droidread_snapshot, e.g. 'e12' — preferred"), ...snapshotOpt, ...selectorShape },
+    ({ ref, snapshot, ...args }) => withDevice("droidread_tap", async () => {
       const el = ref ? await tapRef(ref) : await tapSelector(toSelector(args));
-      return text(`tapped ${el.role} ${JSON.stringify(el.name)} @${el.x},${el.y}\ntake a new snapshot — the old refs are stale now`);
+      await Bun.sleep(800);   // let the tap land before looking
+      return text(await withScreen(`tapped ${el.role} ${JSON.stringify(el.name)} @${el.x},${el.y}`, snapshot ?? true));
     }),
   );
 
@@ -231,18 +254,26 @@ export function buildServer(): McpServer {
     "droidread_swipe",
     "Swipe the screen. 'up' reveals older messages in a chat. Requires DROIDREAD_ALLOW_CONTROL=1.",
     { direction: z.enum(["up", "down", "left", "right"]),
-      durationMs: z.number().optional().describe("swipe duration; lower is faster/longer throw") },
-    ({ direction, durationMs }) => withDevice("droidread_swipe", async () => {
+      durationMs: z.number().optional().describe("swipe duration; lower is faster/longer throw"),
+      ...snapshotOpt },
+    ({ direction, durationMs, snapshot }) => withDevice("droidread_swipe", async () => {
       await swipe(direction, durationMs ?? 250);
-      return text(`swiped ${direction}`);
+      await Bun.sleep(600);
+      // Default OFF here: a swipe is usually followed by a read tool that dumps anyway,
+      // and paying 2.4s for a snapshot nobody looks at is the expensive habit to avoid.
+      return text(await withScreen(`swiped ${direction}`, snapshot ?? false));
     }),
   );
 
   server.tool(
     "droidread_key",
     "Press a hardware key. NOTE: inside a chat, one 'back' returns to the inbox and a second leaves the app. Requires DROIDREAD_ALLOW_CONTROL=1.",
-    { key: z.enum(["back", "home", "enter", "wake"]) },
-    ({ key }) => withDevice("droidread_key", async () => { await pressKey(key); return text(`pressed ${key}`); }),
+    { key: z.enum(["back", "home", "enter", "wake"]), ...snapshotOpt },
+    ({ key, snapshot }) => withDevice("droidread_key", async () => {
+      await pressKey(key);
+      await Bun.sleep(900);
+      return text(await withScreen(`pressed ${key}`, snapshot ?? true));
+    }),
   );
 
   server.tool(
@@ -260,10 +291,21 @@ export function buildServer(): McpServer {
   server.tool(
     "droidread_open",
     `Open a Settings screen or an app, by short name, intent action, or package. One step instead of home-launcher-scroll-tap, which depends on the launcher's layout and the device language. Verifies by reading the focused window afterwards rather than trusting the launch command, which reports success even for an activity it merely brought to the front. Short names: ${Object.keys(SETTINGS_SCREENS).join(", ")}. Requires DROIDREAD_ALLOW_CONTROL=1.`,
-    { target: z.string().describe("short name (e.g. 'developer'), an android.settings.* action, or a package like com.facebook.orca") },
-    ({ target }) => withDevice("droidread_open", async () => {
+    { target: z.string().describe("short name (e.g. 'developer'), an android.settings.* action, or a package like com.facebook.orca"),
+      ...snapshotOpt },
+    ({ target, snapshot }) => withDevice("droidread_open", async () => {
       const r = await openScreen(target);
-      return text(`opened ${r.target} (via ${r.via})\nfocused window: ${r.focus}`);
+      return text(await withScreen(`opened ${r.target} (via ${r.via})\nfocused window: ${r.focus}`, snapshot ?? true));
+    }),
+  );
+
+  server.tool(
+    "droidread_restart_app",
+    "Force-stop an app and launch it again, so it starts at its own front door instead of wherever it was left. Use this when an app resumed somewhere unexpected and backing out would be guesswork. Nothing is deleted — this is the same as swiping the app away from recents. Requires DROIDREAD_ALLOW_CONTROL=1.",
+    { package: z.string().describe("package name, e.g. com.facebook.orca"), ...snapshotOpt },
+    ({ package: pkg, snapshot }) => withDevice("droidread_restart_app", async () => {
+      await restartApp(pkg);
+      return text(await withScreen(`restarted ${pkg}\nfocused window: ${await currentFocus()}`, snapshot ?? true));
     }),
   );
 

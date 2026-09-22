@@ -22,6 +22,7 @@ import { openLineChat, readLineScreen, listChats, LINE_PACKAGE } from "../src/ap
 import { openDb, insertMessages, getExistingKeys, pendingMedia, markMediaDownloaded, upsertAnchors } from "../src/db.ts";
 import { migrate } from "../src/migrate.ts";
 import { MEDIA_DIR, ensureDirs } from "../src/paths.ts";
+import { screenSnapshot } from "../src/snapshot.ts";
 import type { PluginMeta } from "../src/plugins.ts";
 
 const text = (s: string) => ({ content: [{ type: "text" as const, text: s }] });
@@ -52,11 +53,17 @@ const messenger: AppPlugin = {
     const out: RegisteredTool[] = [];
     out.push(server.tool(
       "messenger_open_chat",
-      "Open a Messenger conversation by name and stop there. Does NOT read or scroll — pair it with messenger_read_screen and droidread_swipe, and decide for yourself when to stop.",
-      { chat: z.string().describe("substring of the conversation name") },
-      ({ chat }) => withDevice("messenger_open_chat", async () => {
-        await openConversation(chat);
-        return text(`opened "${chat}" — now use messenger_read_screen, then droidread_swipe direction=up for older messages`);
+      "Open a Messenger conversation by name and stop there. Restarts Messenger first so it begins at the inbox rather than wherever it was left — pass fresh:false to skip that when the app is already on the inbox. Does NOT read or scroll: pair with messenger_read_screen and droidread_swipe, and decide for yourself when to stop. Requires DROIDREAD_ALLOW_CONTROL=1 when fresh is true.",
+      { chat: z.string().describe("substring of the conversation name; use the name exactly as it appears, including Thai script"),
+        fresh: z.boolean().optional().describe("restart the app first (default true)") },
+      ({ chat, fresh }) => withDevice("messenger_open_chat", async () => {
+        await openConversation(chat, { fresh: fresh ?? true });
+        // Show the screen it landed on: the whole failure mode worth catching here is
+        // opening the WRONG conversation, and the header makes that obvious at a glance.
+        let screen = "";
+        try { screen = `\n\n--- screen now ---\n${await screenSnapshot({ refs: true })}`; }
+        catch (e) { screen = `\n\n(could not snapshot: ${(e as Error).message})`; }
+        return text(`opened "${chat}" — now use messenger_read_screen, then droidread_swipe direction=up for older messages${screen}`);
       }),
     ));
 
