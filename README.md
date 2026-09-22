@@ -139,10 +139,11 @@ data they describe and never land in a shared world-readable directory.
 
 ## MCP server
 
-Two-way: query what's on screen, then act on it by selector.
+Two-way: query what's on screen, then act on it by selector. Two transports, same tools:
 
 ```bash
-bun mcp/server.ts          # stdio transport
+bun mcp/server.ts          # stdio — one local client, no network
+bun mcp/http.ts            # Streamable HTTP — agents on other machines, token-gated (see below)
 ```
 
 Register it with any MCP client, e.g.:
@@ -188,6 +189,56 @@ Three further guards, each earned:
 
 `droidread_type` never presses send.
 
+### Over the network: LAN or VPN
+
+The stdio server serves one client on the same machine. To let agents on other machines
+use the phone, run the HTTP transport on the machine adb lives on:
+
+```bash
+echo "DROIDREAD_MCP_TOKEN=$(openssl rand -hex 32)" >> ~/.droidread/.env   # once; file is mode 600
+DROIDREAD_MCP_HOST=10.20.0.7 bun mcp/http.ts                              # your WireGuard IP
+```
+
+`DROIDREAD_MCP_HOST` is a comma-separated list of interfaces to bind; the default is
+`127.0.0.1`, reachable from nowhere else on purpose. `DROIDREAD_MCP_PORT` defaults to
+7373. Both can also live in `~/.droidread/.env`.
+
+On the other machine:
+
+```bash
+claude mcp add --transport http --scope user droidread \
+  http://10.20.0.7:7373/mcp --header "Authorization: Bearer <token>"
+```
+
+What this opens, and what guards it:
+
+- **Whoever reaches the port with the token can read every indexed chat and the phone's
+  screen.** The token is checked on every request with a constant-time compare, and the
+  server refuses to start without one.
+- **Prefer a VPN interface over the LAN.** WireGuard and Tailscale encrypt the tunnel;
+  plain HTTP on a LAN sends the token in clear to anyone on the same wifi. There is no
+  TLS here by design — put it behind a tunnel, not on a public interface.
+- **The control gate stays server-side.** Tap/swipe/type work only if the *server*
+  process was started with `DROIDREAD_ALLOW_CONTROL=1`; a remote client cannot turn it on.
+- **One phone, one driver.** Phone-touching tools go through a device lock; a second
+  agent's `droidread_read` waits for the first to finish rather than corrupting it.
+  `droidread_where` reports whether the device is busy and for how long.
+- **`/health`** answers without a token and says only `{"ok":true}` — for reachability
+  checks from the other side of the tunnel.
+- **Nothing is open unless you start it.** Stopping the process closes the door.
+
+To keep it up across logins, a systemd user unit is enough:
+
+```ini
+[Unit]
+Description=droidread MCP over HTTP
+[Service]
+ExecStart=/usr/bin/env bun /path/to/droidread/mcp/http.ts
+Restart=on-failure
+[Install]
+WantedBy=default.target
+```
+
 ## Device-specific by nature
 
 Every selector was pinned against a **Samsung SM-A146P** running Messenger's Sept 2026
@@ -198,8 +249,10 @@ than silently returning nothing, so breakage is visible.
 ## Scope and ethics
 
 This reads **your own device, your own conversations**, over a debugging connection you
-authorised. It is not a surveillance tool: there is no remote capability, no background
-service, and nothing is transmitted anywhere by default.
+authorised. It is not a surveillance tool: nothing is transmitted anywhere by default,
+there is no background service, and the one network transport (`mcp/http.ts`) is off
+unless you start it, binds to localhost unless you say otherwise, and refuses every
+request without your token.
 
 ## Status
 

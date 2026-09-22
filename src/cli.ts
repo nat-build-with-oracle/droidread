@@ -32,6 +32,7 @@ function usage(): never {
 
   droidread devices                         list adb devices
   droidread snapshot [--all] [--grep=RE]    accessibility tree of the current screen
+  droidread screenshot [--width=540] [--out=F]  picture of the current screen
   droidread read <chat> [--n=100]           read a conversation, index it
   droidread recap <chat>                    read only what's new since the last run
   droidread media <chat> [--cap=40]         download photos this chat has marked pending
@@ -66,6 +67,16 @@ switch (cmd) {
     const grep = flag("grep");
     if (grep) { const re = new RegExp(grep, "i"); out = out.split("\n").filter((l) => re.test(l)).join("\n"); }
     console.log(out);
+    break;
+  }
+
+  case "screenshot": {
+    const { screenshot } = await import("./screen.ts");
+    const shot = await screenshot(Number(flag("width", "540")), Number(flag("quality", "6")));
+    const out = flag("out") ?? `${DATA_DIR}/screen-${new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19)}.${shot.mime === "image/jpeg" ? "jpg" : "png"}`;
+    ensureDirs();
+    await Bun.write(out, shot.data);
+    console.log(`${out}  (${shot.mime}, ${shot.width ? `${shot.width}px wide, ` : ""}${Math.round(shot.bytes / 1024)} KB)`);
     break;
   }
 

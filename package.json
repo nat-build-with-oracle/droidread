@@ -7,7 +7,9 @@
     "droidread": "./src/cli.ts"
   },
   "scripts": {
-    "droidread": "bun src/cli.ts"
+    "droidread": "bun src/cli.ts",
+    "mcp": "bun mcp/server.ts",
+    "mcp:http": "bun mcp/http.ts"
   },
   "dependencies": {
     "@libsql/client": "^0.18.0",
