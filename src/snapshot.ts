@@ -72,36 +72,79 @@ function collapse(list: TreeNode[]): TreeNode[] {
   return out;
 }
 
-function line(n: Node, maxName: number): string {
+// ---------------------------------------------------------------------------
+// Element refs.
+//
+// Coordinates go stale the instant anything scrolls, and a tap on a stale coordinate does
+// not fail — it lands on whatever moved into that spot. That exact bug opened the wrong
+// conversation during development. So a snapshot hands out short handles (e1, e2, ...) and
+// acting on one re-finds the element in a FRESH dump by its identity, refusing if it is
+// gone or ambiguous. Same idea as Playwright's aria refs.
+//
+// Refs belong to the snapshot that produced them. Take a new snapshot after anything that
+// changes the screen.
+// ---------------------------------------------------------------------------
+
+export interface RefEntry {
+  ref: string;
+  cls: string; text: string; desc: string; id: string;
+  x: number; y: number; x1: number; y1: number; x2: number; y2: number;
+  snapshotId: number;
+}
+
+let registry = new Map<string, RefEntry>();
+let snapshotId = 0;
+
+export function lookupRef(ref: string): RefEntry | undefined {
+  return registry.get(ref.trim().toLowerCase());
+}
+
+export function refCount(): number { return registry.size; }
+export function currentSnapshotId(): number { return snapshotId; }
+
+/** Identity, not position: what makes this element THIS element across dumps. */
+export function sameElement(a: { cls: string; text: string; desc: string; id: string }, n: Node): boolean {
+  return a.cls === n.cls && a.text === n.text && a.desc === n.desc && a.id === n.id;
+}
+
+function line(n: Node, maxName: number, ref?: string): string {
   const role = ROLE[n.cls] ?? n.cls.toLowerCase();
   const name = named(n);
   const bits = [role];
   if (name) bits.push(JSON.stringify(name.length > maxName ? name.slice(0, maxName) + "…" : name));
   const attrs: string[] = [];
+  if (ref) attrs.push(`ref=${ref}`);
   if (n.id) attrs.push(`#${n.id}`);
   if (n.clickable) attrs.push("clickable");
   if (attrs.length) bits.push(`[${attrs.join(" ")}]`);
-  bits.push(`@${n.x},${n.y}`);
   return bits.join(" ");
 }
 
-function render(list: TreeNode[], depth: number, maxName: number, out: string[]): void {
+function render(list: TreeNode[], depth: number, maxName: number, out: string[], refs: boolean): void {
   for (const t of list) {
     const pad = "  ".repeat(depth);
+    let ref: string | undefined;
+    // Only things worth acting on get a handle: anything clickable, or a text field.
+    if (refs && (t.node.clickable || t.node.cls === "EditText")) {
+      ref = `e${registry.size + 1}`;
+      registry.set(ref, { ref, cls: t.node.cls, text: t.node.text, desc: t.node.desc, id: t.node.id,
+        x: t.node.x, y: t.node.y, x1: t.node.x1, y1: t.node.y1, x2: t.node.x2, y2: t.node.y2, snapshotId });
+    }
     // Playwright's convention: a node with children ends in ":" and nests beneath.
-    out.push(`${pad}- ${line(t.node, maxName)}${t.children.length ? ":" : ""}`);
-    render(t.children, depth + 1, maxName, out);
+    out.push(`${pad}- ${line(t.node, maxName, ref)}${t.children.length ? ":" : ""}`);
+    render(t.children, depth + 1, maxName, out, refs);
   }
 }
 
-export function snapshot(nodes: Node[], opts: { all?: boolean; maxName?: number } = {}): string {
+export function snapshot(nodes: Node[], opts: { all?: boolean; maxName?: number; refs?: boolean } = {}): string {
   const keep = nodes.filter((n) =>
     opts.all || n.text || n.desc || n.clickable ||
     ["RecyclerView", "ListView", "ScrollView", "EditText"].includes(n.cls),
   );
   const tree = opts.all ? buildTree(keep) : collapse(buildTree(keep));
   const out: string[] = [];
-  render(tree, 0, opts.maxName ?? 70, out);
+  if (opts.refs) { registry = new Map(); snapshotId++; }
+  render(tree, 0, opts.maxName ?? 70, out, opts.refs ?? false);
   return out.join("\n");
 }
 
@@ -141,6 +184,6 @@ export function labels(nodes: Node[]): { name: string; summary: string; clickabl
   return rows.filter((r) => { const k = `${r.name}|${r.y}`; if (seen.has(k)) return false; seen.add(k); return true; });
 }
 
-export async function screenSnapshot(opts: { all?: boolean; maxName?: number } = {}): Promise<string> {
+export async function screenSnapshot(opts: { all?: boolean; maxName?: number; refs?: boolean } = {}): Promise<string> {
   return snapshot(await dump(), opts);
 }

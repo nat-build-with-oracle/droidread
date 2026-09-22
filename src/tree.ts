@@ -64,29 +64,55 @@ export function match(nodes: Node[], sel: Selector): Node[] {
   return nodes.filter((n) => n.desc.toLowerCase().includes(sel.descContains.toLowerCase()));
 }
 
+/**
+ * Resolution failures, tagged with whether trying again could possibly help.
+ *
+ *   transient — nothing matched. The screen may still be settling, or you may need to
+ *               scroll; re-observing is a reasonable next move.
+ *   permanent — several things matched. Retrying identically fails identically; the
+ *               caller must say which one, so the error names the candidates.
+ *
+ * Without the tag an agent retries ambiguity forever, which is the most expensive way to
+ * fail: every attempt costs a 2.4-second dump and none of them can succeed.
+ */
+export class ResolutionError extends Error {
+  constructor(message: string, readonly kind: "transient" | "permanent") {
+    super(message);
+    this.name = "ResolutionError";
+  }
+}
+
+const describeCandidate = (n: Node, i: number) => {
+  const bits = [`${i + 1}.`, n.cls];
+  const name = n.text || n.desc;
+  if (name) bits.push(JSON.stringify(name.length > 40 ? name.slice(0, 40) + "…" : name));
+  if (n.id) bits.push(`#${n.id}`);
+  bits.push(n.clickable ? "(clickable" : "(not clickable");
+  bits.push(`@${n.x},${n.y})`);
+  return bits.join(" ");
+};
+
 /** Resolve to exactly one node, or throw. A tap into empty space looks like success. */
 export function resolveOne(nodes: Node[], sel: Selector): Node {
   const hits = match(nodes, sel);
-  if (hits.length === 0) throw new Error(`no match for ${JSON.stringify(sel)}`);
+  if (hits.length === 0) {
+    throw new ResolutionError(`nothing matched ${JSON.stringify(sel)} — it may be offscreen, or the screen may still be loading`, "transient");
+  }
+  // Narrow before refusing: when some matches are clickable and others are decoration,
+  // the clickable ones are what the caller meant.
   const pick = hits.length > 1 && hits.some((h) => h.clickable) ? hits.filter((h) => h.clickable) : hits;
-  if (pick.length > 1) throw new Error(`${pick.length} matches for ${JSON.stringify(sel)} — refusing to guess`);
+  if (pick.length > 1) {
+    const clickable = pick.filter((h) => h.clickable).length;
+    throw new ResolutionError(
+      `${pick.length} elements matched ${JSON.stringify(sel)} (${clickable} clickable, ${pick.length - clickable} not) — refusing to guess. ` +
+      `Candidates: ${pick.slice(0, 5).map(describeCandidate).join("; ")}${pick.length > 5 ? `; …${pick.length - 5} more` : ""}. ` +
+      `Use a ref from droidread_snapshot, or a more specific selector.`,
+      "permanent",
+    );
+  }
   return pick[0]!;
 }
 
-/**
- * Dump, but only once the tree has stopped changing.
- *
- * WHY: a dump taken right after opening a conversation or after a scroll can be
- * INCOMPLETE — the RecyclerView has not finished laying out, so nodes that are plainly
- * visible on the glass are missing from the tree. Measured: the newest screen of a chat
- * returned 2 items and zero timestamp dividers where a human could see 5 messages and
- * three dividers (10:55, 10:14, 10:02). Reading from that dump silently produces wrong
- * timestamps, which is worse than waiting a second.
- *
- * "Settled" = the same count of message-bearing nodes on `stableSamples` consecutive
- * polls. Content counts are used rather than raw node counts because animations churn
- * decorative nodes indefinitely.
- */
 /**
  * Dump repeatedly until the amount of content stops changing.
  *

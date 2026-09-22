@@ -14,13 +14,13 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 
 import { devices } from "../src/adb.ts";
-import { screenSnapshot } from "../src/snapshot.ts";
-import { openConversation, readThread, fetchMedia, REMOTE_MEDIA_DIR } from "../src/apps/messenger.ts";
+import { screenSnapshot, refCount } from "../src/snapshot.ts";
+import { openConversation, readScreen, fetchMedia, REMOTE_MEDIA_DIR } from "../src/apps/messenger.ts";
 import { openDb, insertMessages, getExistingKeys, pendingMedia, markMediaDownloaded, search, listMessages, messagesSince, upsertAnchors, listAnchors } from "../src/db.ts";
 import { migrate } from "../src/migrate.ts";
 import { MEDIA_DIR, DATA_DIR, ensureDirs } from "../src/paths.ts";
 import { screenshot } from "../src/screen.ts";
-import { query, tapSelector, swipe, pressKey, typeText, assertControlAllowed, openScreen, currentFocus, SETTINGS_SCREENS } from "../src/control.ts";
+import { query, tapSelector, tapRef, typeIntoRef, swipe, pressKey, typeText, assertControlAllowed, openScreen, currentFocus, SETTINGS_SCREENS } from "../src/control.ts";
 import type { Selector } from "../src/tree.ts";
 
 const APP = "messenger";
@@ -118,13 +118,14 @@ export function buildServer(): McpServer {
 
   server.tool(
     "droidread_snapshot",
-    "Readable accessibility-tree snapshot of whatever is on the phone screen right now. Shows which elements are clickable. Cheap and read-only — no taps.",
-    { grep: z.string().optional().describe("case-insensitive regex to filter lines"),
+    "Readable accessibility-tree snapshot of the phone screen, as a nested tree. Every actionable element gets a [ref=eN] handle — pass that to droidread_tap or droidread_type instead of coordinates, which go stale the moment anything scrolls. Refs belong to the LATEST snapshot: take a new one after anything that changes the screen. Cheap and read-only.",
+    { grep: z.string().optional().describe("case-insensitive regex to filter lines; NOTE refs are still assigned from the full tree"),
       all: z.boolean().optional().describe("include structural nodes with no text") },
     ({ grep, all }) => withDevice("droidread_snapshot", async () => {
-      let out = await screenSnapshot({ all });
+      let out = await screenSnapshot({ all, refs: true });
+      const total = refCount();
       if (grep) { const re = new RegExp(grep, "i"); out = out.split("\n").filter((l) => re.test(l)).join("\n"); }
-      return text(out || "(nothing matched)");
+      return text((out || "(nothing matched)") + `\n\n${total} actionable elements have refs`);
     }),
   );
 
@@ -146,34 +147,42 @@ export function buildServer(): McpServer {
   );
 
   server.tool(
-    "droidread_read",
-    "Open a Messenger conversation and read its recent messages, indexing them. SLOW: drives the real UI and scrolls, expect ~1s per screen. Photos are marked, not downloaded. Waits if another caller is using the phone.",
-    { chat: z.string().describe("substring of the conversation name"),
-      n: z.number().optional().describe("how many messages to collect (default 100)") },
-    ({ chat, n }) => withDevice("droidread_read", async () => {
-      const d = await db();
+    "droidread_open_chat",
+    "Open a Messenger conversation by name and stop there. Does NOT read or scroll — pair it with droidread_read_screen and droidread_swipe, and decide for yourself when to stop.",
+    { chat: z.string().describe("substring of the conversation name") },
+    ({ chat }) => withDevice("droidread_open_chat", async () => {
       await openConversation(chat);
-      const { messages, anchors, ending } = await readThread(chat, { want: n ?? 100 });
-      const res = await insertMessages(d, APP, chat, messages);
-      await upsertAnchors(d, APP, chat, anchors);
-      const body = messages.map((m) => `${m.sentAt ? String(m.sentAt).slice(0, 16) + "  " : ""}${m.kind === "photo" ? "[photo] " : ""}${m.sender}: ${m.text}`).join("\n");
-      return text(`${messages.length} messages · ${res.inserted} new, ${res.skipped} already indexed · ${res.dated} dated\nending: ${ending}\n\n${body}`);
+      return text(`opened "${chat}" — now use droidread_read_screen, then droidread_swipe direction=up for older messages`);
     }),
   );
 
   server.tool(
-    "droidread_recap",
-    "Read ONLY messages newer than what is already indexed, stopping as soon as it reaches known history. Much faster than droidread_read for keeping an existing index current. Waits if another caller is using the phone.",
-    { chat: z.string().describe("substring of the conversation name") },
-    ({ chat }) => withDevice("droidread_recap", async () => {
+    "droidread_read_screen",
+    "Index the messages VISIBLE RIGHT NOW in the open conversation, and report which are new. Does not scroll. Takes about 5 seconds. THIS IS THE LOOP PRIMITIVE: call it, then droidread_swipe direction=up, then call it again, and stop when you have what you need or when 'new' reaches 0. Driving the loop yourself means you see every screen, can stop early, and nothing is lost if you change your mind — unlike a tool that scrolls for five minutes and returns once.",
+    { chat: z.string().describe("conversation name to index these messages under") },
+    ({ chat }) => withDevice("droidread_read_screen", async () => {
       const d = await db();
-      const known = await getExistingKeys(d, APP, chat);
-      await openConversation(chat);
-      const { messages, anchors, ending } = await readThread(chat, { want: 0, known });
-      const res = await insertMessages(d, APP, chat, messages);
-      await upsertAnchors(d, APP, chat, anchors);
-      const body = messages.map((m) => `${m.kind === "photo" ? "[photo] " : ""}${m.sender}: ${m.text}`).join("\n");
-      return text(`known before: ${known.size}\nnew: ${messages.length} (${res.inserted} inserted)\nending: ${ending}\n\n${body}`);
+      const r = await readScreen();
+      if (r.onInboxNow) return text("not in a conversation — you are on the inbox. Use droidread_open_chat first.");
+
+      const before = await getExistingKeys(d, APP, chat);
+      const fresh = r.messages.filter((m) => !before.has(`${m.sender}|${m.text}`));
+      const res = await insertMessages(d, APP, chat, r.messages);
+      const na = await upsertAnchors(d, APP, chat, r.anchors);
+
+      const body = r.messages.map((m) => {
+        const mark = before.has(`${m.sender}|${m.text}`) ? "  " : "+ ";
+        return `${mark}${m.sentAt ? String(m.sentAt).slice(0, 16) + "  " : ""}${m.kind === "photo" ? "[photo] " : ""}${m.sender}: ${m.text}`;
+      }).join("\n");
+
+      const hints = [
+        `${r.messages.length} on screen · ${fresh.length} new (${res.inserted} inserted) · ${r.anchors.length} time dividers (${na} new)`,
+        r.settled ? "" : `tree did not settle after ${r.dumps} dumps — this screen may be incomplete`,
+        r.atTop ? "START OF CONVERSATION is visible — no more history above" : "",
+        fresh.length === 0 ? "nothing new here; one more swipe up, and if it is still 0 you have reached indexed history" : "",
+      ].filter(Boolean).join("\n");
+
+      return text(`${hints}\n\n${body}`);
     }),
   );
 
@@ -289,11 +298,11 @@ export function buildServer(): McpServer {
 
   server.tool(
     "droidread_tap",
-    "Tap the single element matching a selector. Requires DROIDREAD_ALLOW_CONTROL=1. Refuses if the selector matches zero or multiple elements — it will not guess. Coordinates are resolved fresh, never reused.",
-    selectorShape,
-    (args) => withDevice("droidread_tap", async () => {
-      const el = await tapSelector(toSelector(args));
-      return text(`tapped ${el.role} ${JSON.stringify(el.name)} @${el.x},${el.y}`);
+    "Tap an element, by ref from the last snapshot (preferred) or by selector. A ref is re-found in a FRESH dump by its identity before tapping, so a scroll between snapshot and tap is caught instead of silently hitting whatever moved into that spot. Refuses on zero or multiple matches rather than guessing. Requires DROIDREAD_ALLOW_CONTROL=1.",
+    { ref: z.string().optional().describe("handle from droidread_snapshot, e.g. 'e12' — preferred"), ...selectorShape },
+    ({ ref, ...args }) => withDevice("droidread_tap", async () => {
+      const el = ref ? await tapRef(ref) : await tapSelector(toSelector(args));
+      return text(`tapped ${el.role} ${JSON.stringify(el.name)} @${el.x},${el.y}\ntake a new snapshot — the old refs are stale now`);
     }),
   );
 
@@ -318,8 +327,13 @@ export function buildServer(): McpServer {
   server.tool(
     "droidread_type",
     "Type ASCII text into the focused field. Does NOT press send. Non-ASCII (Thai, emoji) is refused rather than silently mangled — that needs an IME such as ADBKeyboard. Requires DROIDREAD_ALLOW_CONTROL=1.",
-    { text: z.string().describe("ASCII text to type") },
-    ({ text: s }) => withDevice("droidread_type", async () => { await typeText(s); return text(`typed ${s.length} chars (not sent)`); }),
+    { text: z.string().describe("ASCII text to type"),
+      ref: z.string().optional().describe("focus this element first, by ref from the last snapshot") },
+    ({ text: s, ref }) => withDevice("droidread_type", async () => {
+      if (ref) { const el = await typeIntoRef(ref, s); return text(`typed ${s.length} chars into ${el.role} ${JSON.stringify(el.name)} (not sent)`); }
+      await typeText(s);
+      return text(`typed ${s.length} chars into whatever had focus (not sent)`);
+    }),
   );
 
   server.tool(

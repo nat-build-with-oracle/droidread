@@ -193,13 +193,58 @@ Register it with any MCP client, e.g.:
 | tool | touches phone? | notes |
 |---|---|---|
 | `droidread_devices` / `_where` / `_control_status` | no | reachability and config |
-| `droidread_snapshot` | read | screen as readable text — cheap, and the one you act on |
+| `droidread_snapshot` | read | screen as a tree, with `[ref=eN]` handles to act on |
 | `droidread_screenshot` | read | the picture; free when the web viewer is running |
-| `droidread_query` | read | find elements by selector, see what's clickable |
-| `droidread_search` / `_list` / `_media_pending` | no | index only, phone not involved |
-| `droidread_read` / `_recap` | read + scroll | slow; recap is much cheaper |
+| `droidread_query` / `_focus` | read | find elements; which window has focus |
+| `droidread_search` / `_list` / `_anchors` / `_since` | no | index only, phone not involved |
+| `droidread_open_chat` | read | open a conversation and stop there |
+| `droidread_read_screen` | read | index what is visible now, ~5s — **the loop primitive** |
 | `droidread_media_fetch` | **writes UI** | ~8s per photo |
-| `droidread_tap` / `_swipe` / `_key` / `_type` | **writes UI** | opt-in, see below |
+| `droidread_tap` / `_swipe` / `_key` / `_type` / `_open` | **writes UI** | opt-in, see below |
+
+### No tool owns a long loop
+
+Reading a conversation is a scroll loop that runs for minutes. The CLI owns that loop,
+because the operator can watch it and stop it. A **tool call must not**: the caller waits
+with no output, cannot steer, cannot stop early, and a cancellation throws the work away.
+Both happened here before this was fixed.
+
+So MCP exposes the primitive instead. `droidread_read_screen` indexes what is visible right
+now, in about five seconds, and reports how many were new. The agent decides whether to
+`droidread_swipe` and go again:
+
+```
+droidread_open_chat  chat="Team"
+droidread_read_screen chat="Team"     -> 6 on screen · 6 new · 2 time dividers
+droidread_swipe       direction=up
+droidread_read_screen chat="Team"     -> 5 on screen · 5 new
+droidread_swipe       direction=up
+droidread_read_screen chat="Team"     -> 4 on screen · 0 new  <- reached indexed history
+```
+
+Every screen is written as it is read, so stopping at any point keeps everything so far.
+
+### Refs, not coordinates
+
+A snapshot gives each actionable element a handle:
+
+```
+- group [ref=e7 clickable]:
+  - text "Device care" [#title]
+```
+
+Pass `ref: "e7"` to `droidread_tap`. The element is re-found in a **fresh** dump by its
+identity before the tap lands, so a scroll in between is caught. A raw coordinate would
+not fail — it would hit whatever moved into that spot, which is how a tap once opened the
+wrong conversation. Refs belong to the latest snapshot; take a new one after anything that
+changes the screen.
+
+### Errors say whether retrying can help
+
+Nothing matched is `transient`: the element may be offscreen, or the screen may still be
+loading, so re-observing is reasonable. Several things matched is `permanent`, and the
+error names the candidates, because retrying an ambiguous selector fails identically every
+time and each attempt costs a 2.4-second dump.
 
 ### Control is opt-in
 

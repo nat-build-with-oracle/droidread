@@ -12,6 +12,7 @@
 
 import { adb, tap as tapXY } from "./adb.ts";
 import { dump, match, resolveOne, type Node, type Selector } from "./tree.ts";
+import { lookupRef, sameElement } from "./snapshot.ts";
 
 export class ControlDisabled extends Error {
   constructor() {
@@ -153,4 +154,57 @@ export async function openScreen(target: string): Promise<Launched> {
   }
   await Bun.sleep(1500);
   return { via, target, focus: await currentFocus() };
+}
+
+// ---------------------------------------------------------------------------
+// Acting on a ref handed out by a snapshot.
+//
+// A coordinate is only true for the instant it was read. Tapping a stale one does not
+// fail — it silently hits whatever has since moved into that spot, which is how a tap
+// once opened the wrong conversation. So a ref is resolved against a FRESH dump by the
+// element's identity (class, text, description, resource-id), and position is used only
+// to disambiguate between identical twins.
+// ---------------------------------------------------------------------------
+
+export class StaleRef extends Error {
+  constructor(ref: string, why: string) {
+    super(`ref ${ref} ${why} — take a new snapshot and use the ref from it`);
+    this.name = "StaleRef";
+  }
+}
+
+/** Re-find a ref's element in the current tree, or explain why it is gone. */
+export async function resolveRef(ref: string, nodes?: Node[]): Promise<Node> {
+  const want = lookupRef(ref);
+  if (!want) throw new StaleRef(ref, "is not from the most recent snapshot");
+
+  const now = nodes ?? (await dump());
+  const hits = now.filter((n) => sameElement(want, n));
+  if (hits.length === 0) throw new StaleRef(ref, "is no longer on screen");
+  if (hits.length === 1) return hits[0]!;
+
+  // Identical twins (two rows with the same label): the nearest to where it was wins,
+  // but only if it is clearly nearer, otherwise refuse rather than guess.
+  const dist = (n: Node) => Math.hypot(n.x - want.x, n.y - want.y);
+  const sorted = hits.slice().sort((a, b) => dist(a) - dist(b));
+  if (dist(sorted[1]!) - dist(sorted[0]!) < 40) {
+    throw new StaleRef(ref, `matches ${hits.length} identical elements and none is clearly the original`);
+  }
+  return sorted[0]!;
+}
+
+export async function tapRef(ref: string): Promise<FoundEl> {
+  assertControlAllowed();
+  const n = await resolveRef(ref);
+  await tapXY(n.x, n.y);
+  return describe(n);
+}
+
+export async function typeIntoRef(ref: string, s: string): Promise<FoundEl> {
+  assertControlAllowed();
+  const n = await resolveRef(ref);
+  await tapXY(n.x, n.y);
+  await Bun.sleep(400);
+  await typeText(s);
+  return describe(n);
 }

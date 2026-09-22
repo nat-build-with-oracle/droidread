@@ -355,3 +355,65 @@ export async function fetchMedia(
   }
   return saved;
 }
+
+// ---------------------------------------------------------------------------
+// One screen at a time.
+//
+// readThread() above owns a scroll loop that runs for MINUTES — fine for the CLI, where
+// the operator sees progress and can Ctrl-C. Wrong for a tool call: the caller waits with
+// no output, cannot steer, cannot stop, and a kill loses everything.
+//
+// readScreen() is the primitive the loop is built from. One settled dump, parse, done, in
+// about 5 seconds. The agent decides whether to swipe and go again, and can stop the
+// moment it has what it came for. Same parsing, same anchors, no loop.
+// ---------------------------------------------------------------------------
+
+export interface ScreenRead {
+  messages: Msg[];      // in reading order, oldest first, with divider times carried down
+  anchors: Anchor[];
+  settled: boolean;
+  dumps: number;
+  atTop: boolean;       // the conversation's start marker is visible
+  onInboxNow: boolean;  // not in a conversation at all
+}
+
+/**
+ * Parse the messages visible RIGHT NOW. Does not scroll.
+ *
+ * Divider carrying is per-screen here, which is the honest limit: a cluster whose divider
+ * sits on the screen above gets no time from this call alone. The caller sees the anchors
+ * it did find and can attribute across screens itself, exactly as readThread does after
+ * reversing its screen list.
+ */
+export async function readScreen(): Promise<ScreenRead> {
+  const { nodes, settled, dumps } = await dumpConversation();
+  const msgs = extract(nodes).sort((a, b) => a.y - b.y);
+  const seps = extractSeparators(nodes);
+  const now = new Date();
+
+  const events = [
+    ...seps.map((sp) => ({ y: sp.y, sep: sp.raw, msg: null as Msg | null })),
+    ...msgs.map((m) => ({ y: m.y, sep: null as string | null, msg: m })),
+  ].sort((a, b) => a.y - b.y);
+
+  const messages: Msg[] = [];
+  let current: string | null = null;
+  for (const e of events) {
+    if (e.sep !== null) { current = e.sep; continue; }
+    if (!e.msg) continue;
+    if (e.msg.kind === "photo" && e.msg.mediaWhen) {
+      messages.push({ ...e.msg, sentAtRaw: e.msg.mediaWhen, sentAt: resolveSeparator(e.msg.mediaWhen, now) ?? undefined });
+      continue;
+    }
+    messages.push(current ? { ...e.msg, sentAtRaw: current, sentAt: resolveSeparator(current, now) ?? undefined } : e.msg);
+  }
+
+  return {
+    messages,
+    anchors: seps.map((sp) => ({ raw: sp.raw, sentAt: resolveSeparator(sp.raw, now) })),
+    settled,
+    dumps,
+    atTop: nodes.some((n) => /^start of|you created|created the group/i.test(n.text || n.desc)),
+    onInboxNow: onInbox(nodes),
+  };
+}
