@@ -26,3 +26,10 @@ web/key.pem
 
 # Third-party, fetched by the operator: Genymobile/scrcpy's server jar (Apache-2.0).
 web/scrcpy-server-v3.1
+
+# Local design-skill tool installs (hallmark, impeccable) — dev tooling, not this
+# project's own source. Committed by accident once via `git add -A`; excluded on
+# purpose from here on.
+.agents/
+.claude/
+skills-lock.json
