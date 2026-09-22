@@ -3,7 +3,14 @@
   "version": "0.1.0",
   "description": "Read your own Android phone's chat apps over adb via the accessibility tree, and index them locally.",
   "type": "module",
-  "bin": { "droidread": "./src/cli.ts" },
-  "scripts": { "droidread": "bun src/cli.ts" },
-  "dependencies": { "@libsql/client": "^0.18.0" }
+  "bin": {
+    "droidread": "./src/cli.ts"
+  },
+  "scripts": {
+    "droidread": "bun src/cli.ts"
+  },
+  "dependencies": {
+    "@libsql/client": "^0.18.0",
+    "@modelcontextprotocol/sdk": "^1.30.0"
+  }
 }

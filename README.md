@@ -80,6 +80,57 @@ roughly 8 seconds, and it drives your real Messenger UI. Marking is free.
 Saving only ever taps a control **Messenger itself labels `Save`** — never a guessed
 coordinate, because its neighbours are Forward, React and Delete.
 
+## MCP server
+
+Two-way: query what's on screen, then act on it by selector.
+
+```bash
+bun mcp/server.ts          # stdio transport
+```
+
+Register it with any MCP client, e.g.:
+
+```json
+{
+  "mcpServers": {
+    "droidread": {
+      "command": "bun",
+      "args": ["/path/to/droidread/mcp/server.ts"],
+      "env": { "DROIDREAD_ADB": "/path/to/adb" }
+    }
+  }
+}
+```
+
+| tool | touches phone? | notes |
+|---|---|---|
+| `droidread_devices` / `_where` / `_control_status` | no | reachability and config |
+| `droidread_snapshot` | read | screen as readable text |
+| `droidread_query` | read | find elements by selector, see what's clickable |
+| `droidread_search` / `_list` / `_media_pending` | no | index only, phone not involved |
+| `droidread_read` / `_recap` | read + scroll | slow; recap is much cheaper |
+| `droidread_media_fetch` | **writes UI** | ~8s per photo |
+| `droidread_tap` / `_swipe` / `_key` / `_type` | **writes UI** | opt-in, see below |
+
+### Control is opt-in
+
+Reading a phone is harmless. Tapping inside a live messaging app can send, forward,
+react or delete — so write tools refuse unless you set:
+
+```bash
+DROIDREAD_ALLOW_CONTROL=1
+```
+
+Three further guards, each earned:
+
+- **Taps are selector-based, never raw coordinates.** A coordinate correct one scroll ago
+  lands somewhere else — this exact bug opened the wrong conversation during development.
+- **Ambiguity is refused, not guessed.** Two matches is an error.
+- **`droidread_type` refuses non-ASCII** rather than silently mangling it. Thai and emoji
+  need an IME such as ADBKeyboard; failing loudly beats sending broken text.
+
+`droidread_type` never presses send.
+
 ## Device-specific by nature
 
 Every selector was pinned against a **Samsung SM-A146P** running Messenger's Sept 2026
