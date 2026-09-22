@@ -51,13 +51,28 @@ export async function tapSelector(sel: Selector): Promise<FoundEl> {
 
 export type Dir = "up" | "down" | "left" | "right";
 
-export async function swipe(dir: Dir, ms = 250): Promise<void> {
+/**
+ * DISTANCE and DURATION are separate controls, and confusing them cost a real read: a
+ * short duration was tried as "gentle", but duration alone only changes fling velocity —
+ * the gesture always covered the same 1400px either way, fast or slow, and a fling that
+ * size reliably outruns what uiautomator (and the eye) can capture between screens.
+ *
+ * The default here — 600px at 300ms — is this project's own calibrated safe step,
+ * proven in src/apps/messenger.ts's scroll loop and re-confirmed live: gentle reads lost
+ * nothing, and a 1400px throw at ANY duration skipped a full day of real messages. Pass a
+ * bigger `pixels` only when overshoot is fine and speed is the point — hunting for a name
+ * in a long inbox, not reading content you need every message from.
+ */
+export async function swipe(dir: Dir, ms = 300, pixels = 600): Promise<void> {
   assertControlAllowed();
+  const CENTER_Y = 1200;
+  const CENTER_X = 540;
+  const half = Math.round(pixels / 2);
   const moves: Record<Dir, [string, string, string, string]> = {
-    up:    ["540", "600",  "540", "2000"],   // reveals OLDER content
-    down:  ["540", "1800", "540", "700"],
-    left:  ["900", "1200", "200", "1200"],
-    right: ["200", "1200", "900", "1200"],
+    up:    [String(CENTER_X), String(CENTER_Y - half), String(CENTER_X), String(CENTER_Y + half)],   // reveals OLDER content
+    down:  [String(CENTER_X), String(CENTER_Y + half), String(CENTER_X), String(CENTER_Y - half)],
+    left:  [String(CENTER_X + half), String(CENTER_Y), String(CENTER_X - half), String(CENTER_Y)],
+    right: [String(CENTER_X - half), String(CENTER_Y), String(CENTER_X + half), String(CENTER_Y)],
   };
   await adb("shell", "input", "swipe", ...moves[dir], String(ms));
   await Bun.sleep(700);

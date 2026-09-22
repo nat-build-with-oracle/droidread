@@ -252,12 +252,13 @@ export function buildServer(): McpServer {
 
   server.tool(
     "droidread_swipe",
-    "Swipe the screen. 'up' reveals older messages in a chat. Requires DROIDREAD_ALLOW_CONTROL=1.",
+    "Swipe the screen. 'up' reveals older messages in a chat. DEFAULT IS GENTLE (600px/300ms) — this project's own proven-safe step for reading, where every message matters. A bigger 'pixels' throw is for a different job: hunting for a name in a long inbox, where skipping content is fine and speed is the point. Confusing the two cost a real read once: a short durationMs alone does NOT make a swipe gentle, because duration only changes fling speed, not how far the gesture travels — only 'pixels' does that. Requires DROIDREAD_ALLOW_CONTROL=1.",
     { direction: z.enum(["up", "down", "left", "right"]),
-      durationMs: z.number().optional().describe("swipe duration; lower is faster/longer throw"),
+      pixels: z.number().optional().describe("how far the swipe travels (default 600 — gentle, safe for reading; ~1400 overshoots a full screen, for fast inbox search only)"),
+      durationMs: z.number().optional().describe("how slow the swipe is (default 300); does NOT change distance — see 'pixels'"),
       ...snapshotOpt },
-    ({ direction, durationMs, snapshot }) => withDevice("droidread_swipe", async () => {
-      await swipe(direction, durationMs ?? 250);
+    ({ direction, pixels, durationMs, snapshot }) => withDevice("droidread_swipe", async () => {
+      await swipe(direction, durationMs ?? 300, pixels ?? 600);
       await Bun.sleep(600);
       // Every action returns the screen it produced — swipe included. A swipe whose result
       // you cannot see is a blind step, and blind steps are how a caller ends up swiping
