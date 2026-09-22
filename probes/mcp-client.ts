@@ -102,11 +102,11 @@ if (cmd === "tools") {
   const maxScreens = Number(rest[1] ?? 8);
   if (!chat) { console.error("usage: bun probes/mcp-client.ts read-chat <chat> [screens]"); process.exit(2); }
 
-  console.log(await call("droidread_open_chat", { chat }));
+  console.log(await call("messenger_open_chat", { chat }));
   let empty = 0;
   for (let i = 0; i < maxScreens; i++) {
     const t0 = Date.now();
-    const out = await call("droidread_read_screen", { chat });
+    const out = await call("messenger_read_screen", { chat });
     console.log(`\n--- screen ${i + 1} (${Math.round((Date.now() - t0) / 1000)}s) ---\n${out}`);
 
     const fresh = Number(/·\s*(\d+) new/.exec(out)?.[1] ?? 0);

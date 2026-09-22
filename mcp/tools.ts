@@ -259,9 +259,11 @@ export function buildServer(): McpServer {
     ({ direction, durationMs, snapshot }) => withDevice("droidread_swipe", async () => {
       await swipe(direction, durationMs ?? 250);
       await Bun.sleep(600);
-      // Default OFF here: a swipe is usually followed by a read tool that dumps anyway,
-      // and paying 2.4s for a snapshot nobody looks at is the expensive habit to avoid.
-      return text(await withScreen(`swiped ${direction}`, snapshot ?? false));
+      // Every action returns the screen it produced — swipe included. A swipe whose result
+      // you cannot see is a blind step, and blind steps are how a caller ends up swiping
+      // repeatedly hoping something appeared. Pass snapshot:false when you genuinely do not
+      // need to look, for instance when a read tool follows immediately.
+      return text(await withScreen(`swiped ${direction}`, snapshot ?? true));
     }),
   );
 
@@ -280,11 +282,14 @@ export function buildServer(): McpServer {
     "droidread_type",
     "Type ASCII text into the focused field. Does NOT press send. Non-ASCII (Thai, emoji) is refused rather than silently mangled — that needs an IME such as ADBKeyboard. Requires DROIDREAD_ALLOW_CONTROL=1.",
     { text: z.string().describe("ASCII text to type"),
-      ref: z.string().optional().describe("focus this element first, by ref from the last snapshot") },
-    ({ text: s, ref }) => withDevice("droidread_type", async () => {
-      if (ref) { const el = await typeIntoRef(ref, s); return text(`typed ${s.length} chars into ${el.role} ${JSON.stringify(el.name)} (not sent)`); }
-      await typeText(s);
-      return text(`typed ${s.length} chars into whatever had focus (not sent)`);
+      ref: z.string().optional().describe("focus this element first, by ref from the last snapshot"),
+      ...snapshotOpt },
+    ({ text: s, ref, snapshot }) => withDevice("droidread_type", async () => {
+      const where = ref
+        ? await typeIntoRef(ref, s).then((el) => `${el.role} ${JSON.stringify(el.name)}`)
+        : (await typeText(s), "whatever had focus");
+      await Bun.sleep(600);
+      return text(await withScreen(`typed ${s.length} chars into ${where} (not sent)`, snapshot ?? true));
     }),
   );
 

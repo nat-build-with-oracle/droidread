@@ -172,7 +172,10 @@ const line: AppPlugin = {
       { chat: z.string().describe("substring of the conversation name") },
       ({ chat }) => withDevice("line_open_chat", async () => {
         await openLineChat(chat);
-        return text(`opened "${chat}" in LINE — now use line_read_screen, then droidread_swipe direction=up for older messages`);
+        let screen = "";
+        try { screen = `\n\n--- screen now ---\n${await screenSnapshot({ refs: true })}`; }
+        catch (e) { screen = `\n\n(could not snapshot: ${(e as Error).message})`; }
+        return text(`opened "${chat}" in LINE — now use line_read_screen, then droidread_swipe direction=up for older messages${screen}`);
       }),
     ));
 
