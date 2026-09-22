@@ -1,0 +1,11 @@
+{
+  "id": "messenger",
+  "name": "Facebook Messenger",
+  "packages": ["com.facebook.orca"],
+  "notes": ["notes/overview.md", "notes/timestamps.md", "notes/photos.md"],
+  "verifiedOn": {
+    "device": "Samsung SM-A146P",
+    "androidApp": "Messenger, September 2026 build",
+    "date": "2026-09-22"
+  }
+}

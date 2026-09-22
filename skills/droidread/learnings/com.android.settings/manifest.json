@@ -1,0 +1,11 @@
+{
+  "id": "android-settings",
+  "name": "Android Settings",
+  "packages": ["com.android.settings"],
+  "notes": ["notes/overview.md"],
+  "verifiedOn": {
+    "device": "Samsung SM-A146P",
+    "androidApp": "One UI Settings",
+    "date": "2026-09-22"
+  }
+}
