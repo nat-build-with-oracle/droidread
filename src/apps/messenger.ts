@@ -394,9 +394,15 @@ export interface ScreenRead {
 
 // Module-level, deliberately: the whole point is to catch a fast swipe BETWEEN two
 // separate tool calls, so this cannot live inside readScreen()'s own scope. Keyed by
-// nothing — one open conversation at a time is the model this project already enforces
-// with the device lock, so a single slot is correct, not a shortcut.
+// nothing but the last chat name — one open conversation at a time is the model this
+// project already enforces with the device lock, so a single slot is correct, not a
+// shortcut. The chat name rides along so a SWITCH is caught automatically: comparing
+// screen 1 of a new chat against the tail of the previous one is not a gap, it is two
+// unrelated screens, and the first version of this check had no way to tell them apart —
+// relying on every caller to remember a manual reset, which the very next chat-switch in
+// this same session then proved unreliable.
 let lastScreenKeys: Set<string> | null = null;
+let lastChat: string | null = null;
 
 /**
  * A swipe fast enough to fling, not scroll, can throw the visible content past what
@@ -412,10 +418,12 @@ let lastScreenKeys: Set<string> | null = null;
  * at a time over MCP, where there is no loop to put the retry inside — the caller has to
  * be told, and slow down or swipe back itself.
  */
-function checkOverlap(keys: Set<string>, seps: Separator[]): boolean | null {
-  const prior = lastScreenKeys;
+function checkOverlap(chat: string, keys: Set<string>): boolean | null {
+  const switched = chat !== lastChat;
+  const prior = switched ? null : lastScreenKeys;
   lastScreenKeys = keys;
-  if (prior === null) return null;              // first screen this session — nothing to compare
+  lastChat = chat;
+  if (prior === null) return null;              // first screen of this chat — nothing to compare
   if (prior.size === 0 && keys.size === 0) return true;  // both empty (e.g. sticker-only) — not a gap
   for (const k of keys) if (prior.has(k)) return true;
   return false;
@@ -429,14 +437,14 @@ function checkOverlap(keys: Set<string>, seps: Separator[]): boolean | null {
  * it did find and can attribute across screens itself, exactly as readThread does after
  * reversing its screen list.
  */
-export async function readScreen(): Promise<ScreenRead> {
+export async function readScreen(chat: string): Promise<ScreenRead> {
   const { nodes, settled, dumps } = await dumpConversation();
   const msgs = extract(nodes).sort((a, b) => a.y - b.y);
   const seps = extractSeparators(nodes);
   const now = new Date();
 
   const keys = new Set(msgs.map((m) => `${m.sender}|${m.text}`));
-  const overlapsLast = checkOverlap(keys, seps);
+  const overlapsLast = checkOverlap(chat, keys);
 
   const events = [
     ...seps.map((sp) => ({ y: sp.y, sep: sp.raw, msg: null as Msg | null })),
@@ -466,8 +474,13 @@ export async function readScreen(): Promise<ScreenRead> {
   };
 }
 
-/** Call after opening a chat, so the FIRST screen doesn't compare against a stale prior one. */
-export function resetScreenContinuity(): void { lastScreenKeys = null; }
+/**
+ * Force the next readScreen() to treat itself as a first screen, with no prior to compare
+ * against. readScreen(chat) already does this automatically on a chat switch; this
+ * remains for the case a caller reopens the SAME chat (e.g. fresh:true) and wants the
+ * stale tail of its own previous visit discarded too.
+ */
+export function resetScreenContinuity(): void { lastScreenKeys = null; lastChat = null; }
 
 // ---------------------------------------------------------------------------
 // Opening a chat WITHOUT a hidden loop.

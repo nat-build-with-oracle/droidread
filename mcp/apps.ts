@@ -77,7 +77,7 @@ const messenger: AppPlugin = {
       { chat: z.string().describe("conversation name to index these messages under") },
       ({ chat }) => withDevice("messenger_read_screen", async () => {
         const d = await db();
-        const r = await readScreen();
+        const r = await readScreen(chat);
         if (r.onInboxNow) return text("not in a conversation — you are on the inbox. Use messenger_open_chat first.");
 
         const before = await getExistingKeys(d, APP, chat);
