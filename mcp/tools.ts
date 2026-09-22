@@ -20,7 +20,7 @@ import { openDb, insertMessages, getExistingKeys, pendingMedia, markMediaDownloa
 import { migrate } from "../src/migrate.ts";
 import { MEDIA_DIR, DATA_DIR, ensureDirs } from "../src/paths.ts";
 import { screenshot } from "../src/screen.ts";
-import { query, tapSelector, swipe, pressKey, typeText, assertControlAllowed } from "../src/control.ts";
+import { query, tapSelector, swipe, pressKey, typeText, assertControlAllowed, openScreen, currentFocus, SETTINGS_SCREENS } from "../src/control.ts";
 import type { Selector } from "../src/tree.ts";
 
 const APP = "messenger";
@@ -320,6 +320,23 @@ export function buildServer(): McpServer {
     "Type ASCII text into the focused field. Does NOT press send. Non-ASCII (Thai, emoji) is refused rather than silently mangled — that needs an IME such as ADBKeyboard. Requires DROIDREAD_ALLOW_CONTROL=1.",
     { text: z.string().describe("ASCII text to type") },
     ({ text: s }) => withDevice("droidread_type", async () => { await typeText(s); return text(`typed ${s.length} chars (not sent)`); }),
+  );
+
+  server.tool(
+    "droidread_open",
+    `Open a Settings screen or an app, by short name, intent action, or package. One step instead of home-launcher-scroll-tap, which depends on the launcher's layout and the device language. Verifies by reading the focused window afterwards rather than trusting the launch command, which reports success even for an activity it merely brought to the front. Short names: ${Object.keys(SETTINGS_SCREENS).join(", ")}. Requires DROIDREAD_ALLOW_CONTROL=1.`,
+    { target: z.string().describe("short name (e.g. 'developer'), an android.settings.* action, or a package like com.facebook.orca") },
+    ({ target }) => withDevice("droidread_open", async () => {
+      const r = await openScreen(target);
+      return text(`opened ${r.target} (via ${r.via})\nfocused window: ${r.focus}`);
+    }),
+  );
+
+  server.tool(
+    "droidread_focus",
+    "Which window has focus on the phone right now. The cheapest way to confirm where you are before acting. Read-only.",
+    {},
+    () => withDevice("droidread_focus", async () => text(await currentFocus())),
   );
 
   server.tool(

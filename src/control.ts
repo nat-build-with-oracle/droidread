@@ -84,3 +84,73 @@ export async function typeText(s: string): Promise<void> {
   await adb("shell", "input", "text", s.replace(/ /g, "%s"));
   await Bun.sleep(600);
 }
+
+// ---------------------------------------------------------------------------
+// Launching apps and settings screens.
+//
+// WHY THIS IS NOT A SEQUENCE OF TAPS: getting to a settings screen by pressing home,
+// opening the launcher, scrolling for an icon and tapping it is many fragile steps that
+// depend on the launcher's layout and the device's language. `am start` with a documented
+// intent action is one step and works the same on every Android.
+//
+// It counts as control and is gated like the rest: it changes what is on the screen, and
+// an agent that can open Settings can open anything.
+// ---------------------------------------------------------------------------
+
+/** Documented Settings shortcuts, so a caller does not have to remember the action strings. */
+export const SETTINGS_SCREENS: Record<string, string> = {
+  settings: "android.settings.SETTINGS",
+  developer: "android.settings.APPLICATION_DEVELOPMENT_SETTINGS",
+  display: "android.settings.DISPLAY_SETTINGS",
+  wifi: "android.settings.WIFI_SETTINGS",
+  bluetooth: "android.settings.BLUETOOTH_SETTINGS",
+  battery: "android.settings.BATTERY_SAVER_SETTINGS",
+  apps: "android.settings.APPLICATION_SETTINGS",
+  accessibility: "android.settings.ACCESSIBILITY_SETTINGS",
+  date: "android.settings.DATE_SETTINGS",
+  storage: "android.settings.INTERNAL_STORAGE_SETTINGS",
+  security: "android.settings.SECURITY_SETTINGS",
+  about: "android.settings.DEVICE_INFO_SETTINGS",
+};
+
+export interface Launched { via: "screen" | "action" | "package"; target: string; focus: string }
+
+/** What window currently has focus — the honest check that a launch actually landed. */
+export async function currentFocus(): Promise<string> {
+  const out = await adb("shell", "dumpsys window");
+  const line = out.split("\n").find((l) => l.includes("mCurrentFocus")) ?? "";
+  return line.split("=").slice(1).join("=").trim().replace(/^Window\{[^ ]+ u0 /, "").replace(/\}$/, "") || "(unknown)";
+}
+
+/**
+ * Open a settings screen by short name, an intent action, or an app by package.
+ * Verifies with the focused window rather than trusting `am start`, which reports success
+ * for an activity it merely brought to the front.
+ */
+export async function openScreen(target: string): Promise<Launched> {
+  assertControlAllowed();
+  const key = target.trim().toLowerCase();
+
+  let via: Launched["via"], out: string;
+  if (SETTINGS_SCREENS[key]) {
+    via = "screen";
+    out = await adb("shell", "am", "start", "-a", SETTINGS_SCREENS[key]!);
+  } else if (target.includes(".") && !target.includes("/") && target.startsWith("android.settings.")) {
+    via = "action";
+    out = await adb("shell", "am", "start", "-a", target);
+  } else if (target.includes(".")) {
+    via = "package";
+    out = await adb("shell", "monkey", "-p", target, "-c", "android.intent.category.LAUNCHER", "1");
+  } else {
+    throw new Error(
+      `unknown target ${JSON.stringify(target)} — use one of: ${Object.keys(SETTINGS_SCREENS).join(", ")}, ` +
+      `an android.settings.* action, or a package name like com.facebook.orca`,
+    );
+  }
+
+  if (/Error|Exception|No activities found/i.test(out)) {
+    throw new Error(`launch failed for ${target}: ${out.trim().split("\n")[0]}`);
+  }
+  await Bun.sleep(1500);
+  return { via, target, focus: await currentFocus() };
+}

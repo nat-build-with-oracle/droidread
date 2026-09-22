@@ -34,6 +34,7 @@ function usage(): never {
   droidread snapshot [--all] [--grep=RE]    accessibility tree of the current screen
   droidread screenshot [--width=540] [--out=F]  picture of the current screen
   droidread web [--port=8791]               browser viewer + tap control (LAN/VPN, no auth)
+  droidread open <screen|package>           open a Settings screen or app (needs control)
   droidread read <chat> [--n=100] [--max-ms=0]  read a conversation, index it
   droidread recap <chat>                    read only what's new since the last run
   droidread media <chat> [--cap=40]         download photos this chat has marked pending
@@ -80,6 +81,20 @@ switch (cmd) {
       stdout: "inherit", stderr: "inherit", stdin: "inherit",
     });
     process.exit(await proc.exited);
+  }
+
+  case "open": {
+    const { openScreen, SETTINGS_SCREENS } = await import("./control.ts");
+    const target = positional[0];
+    if (!target) {
+      console.log(`known screens: ${Object.keys(SETTINGS_SCREENS).join(", ")}`);
+      console.log("or an android.settings.* action, or a package name");
+      break;
+    }
+    const r = await openScreen(target);
+    console.log(`opened ${r.target} (via ${r.via})`);
+    console.log(`focused window: ${r.focus}`);
+    break;
   }
 
   case "screenshot": {
