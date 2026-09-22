@@ -128,8 +128,12 @@ function render(list: TreeNode[], depth: number, maxName: number, out: string[],
   for (const t of list) {
     const pad = "  ".repeat(depth);
     let ref: string | undefined;
-    // Only things worth acting on get a handle: anything clickable, or a text field.
-    if (refs && (t.node.clickable || t.node.cls === "EditText")) {
+    // Only things worth acting on get a handle: anything clickable, a text field — and a
+    // progress bar. That last one is deliberate: Messenger's "load older messages" retry
+    // control is a ProgressBar with no text, no description and clickable=false, yet a
+    // tap on it is the only way to unstick a stalled history load. Giving it a ref keeps
+    // taps identity-resolved instead of opening a raw-coordinate escape hatch.
+    if (refs && (t.node.clickable || t.node.cls === "EditText" || t.node.cls === "ProgressBar")) {
       ref = `e${registry.size + 1}`;
       registry.set(ref, { ref, cls: t.node.cls, text: t.node.text, desc: t.node.desc, id: t.node.id,
         x: t.node.x, y: t.node.y, x1: t.node.x1, y1: t.node.y1, x2: t.node.x2, y2: t.node.y2, snapshotId });

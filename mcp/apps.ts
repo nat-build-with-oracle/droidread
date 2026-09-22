@@ -17,7 +17,7 @@
 import { McpServer, type RegisteredTool } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 
-import { openConversation, openChatOnScreen, readScreen, fetchMedia, REMOTE_MEDIA_DIR, MESSENGER_PACKAGE } from "../src/apps/messenger.ts";
+import { openConversation, openChatOnScreen, readScreen, resetScreenContinuity, fetchMedia, REMOTE_MEDIA_DIR, MESSENGER_PACKAGE } from "../src/apps/messenger.ts";
 import { restartApp } from "../src/control.ts";
 import { openLineChat, readLineScreen, listChats, LINE_PACKAGE } from "../src/apps/line.ts";
 import { openDb, insertMessages, getExistingKeys, pendingMedia, markMediaDownloaded, upsertAnchors } from "../src/db.ts";
@@ -59,6 +59,7 @@ const messenger: AppPlugin = {
         fresh: z.boolean().optional().describe("restart Messenger first so the inbox starts at the top (default false)") },
       ({ chat, fresh }) => withDevice("messenger_open_chat", async () => {
         if (fresh) await restartApp(MESSENGER_PACKAGE);
+        resetScreenContinuity();   // a freshly opened chat has no prior screen to compare against
         const r = await openChatOnScreen(chat);
         const seen = r.visible.length ? `visible on this screen: ${r.visible.join(" · ")}` : "no chat rows on this screen";
         if (r.ambiguous) return text(`${r.ambiguous.length} chats match ${JSON.stringify(chat)}: ${r.ambiguous.join(" · ")} — give more of the name.\n${seen}`);
@@ -92,8 +93,9 @@ const messenger: AppPlugin = {
         const hints = [
           `${r.messages.length} on screen · ${fresh.length} new (${res.inserted} inserted) · ${r.anchors.length} time dividers (${na} new)`,
           r.settled ? "" : `tree did not settle after ${r.dumps} dumps — this screen may be incomplete`,
+          r.overlapsLast === false ? "⚠ NO OVERLAP with the previous screen — the swipe likely skipped content. Swipe back down a little and read again, or swipe shorter/slower next time." : "",
           r.atTop ? "START OF CONVERSATION is visible — no more history above" : "",
-          fresh.length === 0 ? "nothing new here; one more swipe up, and if it is still 0 you have reached indexed history" : "",
+          fresh.length === 0 && r.overlapsLast !== false ? "nothing new here; one more swipe up, and if it is still 0 you have reached indexed history" : "",
         ].filter(Boolean).join("\n");
 
         return text(`${hints}\n\n${body}`);

@@ -389,6 +389,36 @@ export interface ScreenRead {
   dumps: number;
   atTop: boolean;       // the conversation's start marker is visible
   onInboxNow: boolean;  // not in a conversation at all
+  overlapsLast: boolean | null;   // null = no prior call to compare against yet
+}
+
+// Module-level, deliberately: the whole point is to catch a fast swipe BETWEEN two
+// separate tool calls, so this cannot live inside readScreen()'s own scope. Keyed by
+// nothing — one open conversation at a time is the model this project already enforces
+// with the device lock, so a single slot is correct, not a shortcut.
+let lastScreenKeys: Set<string> | null = null;
+
+/**
+ * A swipe fast enough to fling, not scroll, can throw the visible content past what
+ * uiautomator ever captures. Measured directly: a 120ms swipe between two
+ * messenger_read_screen calls left a gap containing 5 real messages that appeared in
+ * NEITHER capture. It went unnoticed because both were already indexed from an earlier,
+ * slower pass — the exact same gap over genuinely new content would have been lost with
+ * no signal at all, because "0 new" and "screen skipped past new content" look identical
+ * from inside readScreen() alone.
+ *
+ * readThread()'s internal loop already guards this with a continuity check and a
+ * back-up-and-retry. This is that same guarantee, exposed to a caller driving one screen
+ * at a time over MCP, where there is no loop to put the retry inside — the caller has to
+ * be told, and slow down or swipe back itself.
+ */
+function checkOverlap(keys: Set<string>, seps: Separator[]): boolean | null {
+  const prior = lastScreenKeys;
+  lastScreenKeys = keys;
+  if (prior === null) return null;              // first screen this session — nothing to compare
+  if (prior.size === 0 && keys.size === 0) return true;  // both empty (e.g. sticker-only) — not a gap
+  for (const k of keys) if (prior.has(k)) return true;
+  return false;
 }
 
 /**
@@ -404,6 +434,9 @@ export async function readScreen(): Promise<ScreenRead> {
   const msgs = extract(nodes).sort((a, b) => a.y - b.y);
   const seps = extractSeparators(nodes);
   const now = new Date();
+
+  const keys = new Set(msgs.map((m) => `${m.sender}|${m.text}`));
+  const overlapsLast = checkOverlap(keys, seps);
 
   const events = [
     ...seps.map((sp) => ({ y: sp.y, sep: sp.raw, msg: null as Msg | null })),
@@ -429,8 +462,12 @@ export async function readScreen(): Promise<ScreenRead> {
     dumps,
     atTop: nodes.some((n) => /^start of|you created|created the group/i.test(n.text || n.desc)),
     onInboxNow: onInbox(nodes),
+    overlapsLast,
   };
 }
+
+/** Call after opening a chat, so the FIRST screen doesn't compare against a stale prior one. */
+export function resetScreenContinuity(): void { lastScreenKeys = null; }
 
 // ---------------------------------------------------------------------------
 // Opening a chat WITHOUT a hidden loop.
