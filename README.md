@@ -90,6 +90,33 @@ roughly 8 seconds, and it drives your real Messenger UI. Marking is free.
 Saving only ever taps a control **Messenger itself labels `Save`** — never a guessed
 coordinate, because its neighbours are Forward, React and Delete.
 
+## Probes
+
+Every selector and format here was established by running a probe against a real device
+and reading what came back. They live in `probes/` and are meant to be re-run whenever
+Messenger changes something:
+
+```bash
+bun probes/dividers.ts            # what timestamp formats exist
+bun probes/divider-direction.ts   # does a divider label the cluster above or below
+bun probes/tail.ts "Chat Name"    # newest end, dividers and messages interleaved
+bun probes/photo-viewer.ts        # what controls the photo viewer offers
+bun probes/db-inspect.ts          # what the index holds, and whether it agrees with itself
+```
+
+`db-inspect.ts` is the useful one to run after any timestamp work: photos state their own
+time, so comparing that against the inferred `sent_at` is a free correctness check.
+
+```bash
+bun test                          # divider-label resolution, against a fixed clock
+```
+
+## Where temporary files go
+
+Nothing in this project writes to `/tmp`. Runtime artifacts (logs, intermediate JSON)
+belong under `~/.droidread/` — `~/.droidread/logs/` for run logs — so they sit beside the
+data they describe and never land in a shared world-readable directory.
+
 ## MCP server
 
 Two-way: query what's on screen, then act on it by selector.

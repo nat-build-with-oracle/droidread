@@ -14,7 +14,7 @@ import { z } from "zod";
 import { devices, adb } from "../src/adb.ts";
 import { screenSnapshot } from "../src/snapshot.ts";
 import { openConversation, readThread, fetchMedia, REMOTE_MEDIA_DIR } from "../src/apps/messenger.ts";
-import { openDb, insertMessages, getExistingKeys, pendingMedia, markMediaDownloaded, search, listMessages } from "../src/db.ts";
+import { openDb, insertMessages, getExistingKeys, pendingMedia, markMediaDownloaded, search, listMessages, messagesSince } from "../src/db.ts";
 import { migrate } from "../src/migrate.ts";
 import { MEDIA_DIR, DATA_DIR, ensureDirs, loadEnvFile } from "../src/paths.ts";
 
@@ -76,8 +76,8 @@ server.tool(
     await openConversation(chat);
     const { messages, ending } = await readThread(chat, { want: n ?? 100 });
     const res = await insertMessages(d, APP, chat, messages);
-    const body = messages.map((m) => `${m.kind === "photo" ? "[photo] " : ""}${m.sender}: ${m.text}`).join("\n");
-    return text(`${messages.length} messages · ${res.inserted} new, ${res.skipped} already indexed\nending: ${ending}\n\n${body}`);
+    const body = messages.map((m) => `${m.sentAt ? String(m.sentAt).slice(0, 16) + "  " : ""}${m.kind === "photo" ? "[photo] " : ""}${m.sender}: ${m.text}`).join("\n");
+    return text(`${messages.length} messages · ${res.inserted} new, ${res.skipped} already indexed · ${res.dated} dated\nending: ${ending}\n\n${body}`);
   },
 );
 
@@ -133,6 +133,20 @@ server.tool(
       updated++;
     }
     return text(`saved ${saved.length}, db rows updated ${updated}\n${saved.map((s) => `${s.sender} ${s.when} -> ${s.file}`).join("\n")}`);
+  },
+);
+
+server.tool(
+  "droidread_since",
+  "Count and list messages sent at or after a given local time, e.g. '2026-09-22 08:00'. Rows whose send time is unknown are reported separately and never assumed to be inside or outside the window. Does not touch the phone.",
+  { chat: z.string().describe("substring of the conversation name"),
+    since: z.string().describe("local time, 'YYYY-MM-DD HH:MM'") },
+  async ({ chat, since }) => {
+    const { rows, undated, total } = await messagesSince(await db(), APP, chat, since);
+    const head = `${rows.length} messages at or after ${since} (of ${total} indexed; ${undated} have no known send time)`;
+    if (!rows.length) return text(head);
+    return text(head + "\n\n" + rows.map((r) =>
+      `${String(r.sent_at).slice(0, 16)}  ${r.kind === "photo" ? "[photo] " : ""}${r.sender}: ${String(r.text).replace(/\n/g, " ").slice(0, 100)}`).join("\n"));
   },
 );
 

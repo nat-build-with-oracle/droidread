@@ -22,22 +22,41 @@ export interface MsgRow {
   mediaRef?: string;
   mediaWhen?: string;
   mediaFile?: string | null;
+  sentAt?: string;
+  sentAtRaw?: string;
 }
 
-export interface InsertResult { inserted: number; skipped: number }
+export interface InsertResult { inserted: number; skipped: number; dated: number }
 
 export async function insertMessages(db: Client, app: string, chat: string, rows: MsgRow[]): Promise<InsertResult> {
-  let inserted = 0, skipped = 0;
+  // rowsAffected is 1 for an upsert whether it inserted or updated, so it cannot tell
+  // new from existing. Count the table before and after instead — one extra query for
+  // the whole batch, rather than a wrong number reported per row.
+  const countOf = async () =>
+    Number((await db.execute({ sql: `SELECT COUNT(*) AS n FROM messages WHERE app = ? AND chat = ?`, args: [app, chat] })).rows[0]!.n);
+  const before = await countOf();
+  let processed = 0, dated = 0;
   for (const r of rows) {
     if (!r.text.trim()) continue;
+    // Upsert rather than INSERT OR IGNORE: a re-read of history already indexed must be
+    // able to FILL IN a timestamp that was missing, otherwise rows captured before
+    // divider support existed would stay permanently undated. COALESCE keeps whatever
+    // is already there — a later read never overwrites a known value with null.
     const res = await db.execute({
-      sql: `INSERT OR IGNORE INTO messages (app, chat, sender, text, kind, media_ref, media_when, media_file)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      args: [app, chat, r.sender, r.text, r.kind ?? "text", r.mediaRef ?? "", r.mediaWhen ?? "", r.mediaFile ?? null],
+      sql: `INSERT INTO messages (app, chat, sender, text, kind, media_ref, media_when, media_file, sent_at, sent_at_raw)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT (app, chat, sender, text, media_ref) DO UPDATE SET
+              sent_at     = COALESCE(messages.sent_at, excluded.sent_at),
+              sent_at_raw = COALESCE(messages.sent_at_raw, excluded.sent_at_raw),
+              media_file  = COALESCE(messages.media_file, excluded.media_file)`,
+      args: [app, chat, r.sender, r.text, r.kind ?? "text", r.mediaRef ?? "", r.mediaWhen ?? "",
+             r.mediaFile ?? null, r.sentAt ?? null, r.sentAtRaw ?? null],
     });
-    if (res.rowsAffected > 0) inserted++; else skipped++;
+    if (res.rowsAffected > 0) processed++;
+    if (r.sentAt) dated++;
   }
-  return { inserted, skipped };
+  const inserted = (await countOf()) - before;
+  return { inserted, skipped: processed - inserted, dated };
 }
 
 /** Keys already indexed for a chat, as "sender|text" — the recap stop-boundary. */
@@ -75,9 +94,32 @@ export async function search(db: Client, query: string, limit = 20) {
 
 export async function listMessages(db: Client, app: string, chat: string, limit: number) {
   const res = await db.execute({
-    sql: `SELECT id, sender, text, kind, media_when, media_file FROM messages
+    sql: `SELECT id, sender, text, kind, media_when, media_file, sent_at, sent_at_raw FROM messages
           WHERE app = ? AND chat = ? ORDER BY id DESC LIMIT ?`,
     args: [app, chat, limit],
   });
   return res.rows.reverse();
+}
+
+/**
+ * Messages sent at or after `since` (local "YYYY-MM-DD HH:MM:SS").
+ * Rows with no known send time are reported separately rather than assumed to be
+ * inside or outside the window — an undated row is unknown, not old.
+ */
+export async function messagesSince(db: Client, app: string, chat: string, since: string) {
+  const inWindow = await db.execute({
+    sql: `SELECT id, sender, text, kind, sent_at, sent_at_raw FROM messages
+          WHERE app = ? AND chat = ? AND sent_at IS NOT NULL AND sent_at >= ?
+          ORDER BY sent_at, id`,
+    args: [app, chat, since],
+  });
+  const undated = await db.execute({
+    sql: `SELECT COUNT(*) AS n FROM messages WHERE app = ? AND chat = ? AND sent_at IS NULL`,
+    args: [app, chat],
+  });
+  const total = await db.execute({
+    sql: `SELECT COUNT(*) AS n FROM messages WHERE app = ? AND chat = ?`,
+    args: [app, chat],
+  });
+  return { rows: inWindow.rows, undated: Number(undated.rows[0]!.n), total: Number(total.rows[0]!.n) };
 }

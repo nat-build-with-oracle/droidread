@@ -7,7 +7,7 @@
 import { devices } from "./adb.ts";
 import { screenSnapshot } from "./snapshot.ts";
 import { openConversation, readThread, fetchMedia, REMOTE_MEDIA_DIR } from "./apps/messenger.ts";
-import { openDb, insertMessages, getExistingKeys, pendingMedia, markMediaDownloaded, search, listMessages } from "./db.ts";
+import { openDb, insertMessages, getExistingKeys, pendingMedia, markMediaDownloaded, search, listMessages, messagesSince } from "./db.ts";
 import { migrate } from "./migrate.ts";
 import { MEDIA_DIR, DATA_DIR, ensureDirs, loadEnvFile } from "./paths.ts";
 
@@ -37,6 +37,7 @@ function usage(): never {
   droidread media <chat> [--cap=40]         download photos this chat has marked pending
   droidread search <query> [--limit=20]     full-text search the index
   droidread list <chat> [--n=50]            show indexed messages
+  droidread since <chat> <YYYY-MM-DD HH:MM>  messages sent at or after a time
   droidread where                           show where data is stored
 
 Data lives in ${DATA_DIR} (override with DROIDREAD_HOME). Nothing is uploaded
@@ -82,7 +83,7 @@ switch (cmd) {
     });
     const res = await insertMessages(d, APP, chat, messages);
     console.error(`${ending}`);
-    console.log(`${messages.length} messages read · ${res.inserted} new, ${res.skipped} already indexed`);
+    console.log(`${messages.length} messages read · ${res.inserted} new, ${res.skipped} already indexed · ${res.dated} carried a timestamp`);
     for (const m of messages) console.log(`${m.kind === "photo" ? "[photo] " : ""}${m.sender}: ${m.text}`);
     break;
   }
@@ -128,8 +129,21 @@ switch (cmd) {
     if (!chat) usage();
     const rows = await listMessages(await db(), APP, chat, Number(flag("n", "50")));
     for (const r of rows) {
-      const mark = r.kind === "photo" ? (r.media_file ? "[photo ✓]" : "[photo …]") : "";
-      console.log(`${mark}${r.sender}: ${r.text}`);
+      const mark = r.kind === "photo" ? (r.media_file ? "[photo ✓] " : "[photo …] ") : "";
+      const when = r.sent_at ? `${String(r.sent_at).slice(0, 16)}  ` : "(no time)         ";
+      console.log(`${when}${mark}${r.sender}: ${String(r.text).replace(/\n/g, " ").slice(0, 80)}`);
+    }
+    break;
+  }
+
+  case "since": {
+    const chat = positional[0];
+    const since = positional.slice(1).join(" ");
+    if (!chat || !since) usage();
+    const { rows, undated, total } = await messagesSince(await db(), APP, chat, since);
+    console.log(`${rows.length} messages at or after ${since}  (of ${total} indexed; ${undated} have no known send time)`);
+    for (const r of rows) {
+      console.log(`${String(r.sent_at).slice(0, 16)}  ${r.kind === "photo" ? "[photo] " : ""}${r.sender}: ${String(r.text).replace(/\n/g, " ").slice(0, 80)}`);
     }
     break;
   }

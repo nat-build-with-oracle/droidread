@@ -16,6 +16,7 @@
 
 import { adb, tap, back, wake, swipeUp, swipeDown } from "../adb.ts";
 import { dump, match, type Node } from "../tree.ts";
+import { isSeparatorLabel, resolveSeparator } from "../time.ts";
 
 export const SUFFIX = ", double-tap to see sent/receive date and time, double-tap and hold to react on message";
 const PHOTO_RE = /(received|sent) photo message/i;
@@ -29,6 +30,29 @@ export interface Msg {
   kind: "text" | "photo";
   mediaRef?: string;
   mediaWhen?: string;
+  sentAt?: string;      // resolved local timestamp
+  sentAtRaw?: string;   // the divider label exactly as Messenger rendered it
+}
+
+export interface Separator { y: number; raw: string }
+
+/**
+ * Timestamp dividers between message clusters.
+ *
+ * Shape confirmed live: a non-clickable node, narrow and centred, whose text and
+ * content-desc are the SAME string ("02:34", "FRI AT 14:29", "17 SEPT AT 12:06").
+ * The text===desc equality is what separates a divider from an ordinary message, whose
+ * desc carries the sender and the double-tap suffix while its text is usually empty.
+ */
+export function extractSeparators(nodes: Node[]): Separator[] {
+  const out: Separator[] = [];
+  for (const n of nodes) {
+    if (n.clickable || !n.text || n.text !== n.desc) continue;
+    if (n.x2 - n.x1 > 700) continue;  // a wide node is content, not a divider
+    if (!isSeparatorLabel(n.text)) continue;
+    out.push({ y: n.y, raw: n.text.trim() });
+  }
+  return out;
 }
 
 /**
@@ -126,11 +150,13 @@ export async function readThread(target: string, opts: ReadOpts = {}): Promise<R
   const { want = 100, hardCap = 300, stagnantStop = 4, known } = opts;
 
   const seen = new Set<string>();
-  const screens: Msg[][] = [];
+  const screens: { msgs: Msg[]; seps: Separator[] }[] = [];
   let stagnant = 0, hitKnown = false, hitCap = true;
 
   for (let i = 0; i < hardCap; i++) {
-    const msgs = extract(await dump()).sort((a, b) => a.y - b.y);
+    const nodes = await dump();
+    const msgs = extract(nodes).sort((a, b) => a.y - b.y);
+    const seps = extractSeparators(nodes);
     const before = seen.size;
     const fresh: Msg[] = [];
     for (const m of msgs) {
@@ -140,7 +166,7 @@ export async function readThread(target: string, opts: ReadOpts = {}): Promise<R
       seen.add(key);
       fresh.push(m);
     }
-    if (fresh.length) screens.push(fresh);
+    if (fresh.length || seps.length) screens.push({ msgs: fresh, seps });
 
     if (want > 0 && seen.size >= want) { hitCap = false; break; }
     if (hitKnown) { hitCap = false; break; }
@@ -152,7 +178,26 @@ export async function readThread(target: string, opts: ReadOpts = {}): Promise<R
     await Bun.sleep(1100);
   }
 
-  const messages = screens.slice().reverse().flat();
+  // Assemble chronologically, then walk the merged divider/message stream carrying the
+  // last divider forward. This has to happen AFTER reversal: a cluster's divider often
+  // sits on the screen ABOVE, which is captured on a later iteration while scrolling up,
+  // so it is only adjacent to its messages once everything is back in reading order.
+  const now = new Date();
+  const messages: Msg[] = [];
+  let current: string | null = null;
+  for (const screen of screens.slice().reverse()) {
+    const events = [
+      ...screen.seps.map((s) => ({ y: s.y, sep: s.raw, msg: null as Msg | null })),
+      ...screen.msgs.map((m) => ({ y: m.y, sep: null as string | null, msg: m })),
+    ].sort((a, b) => a.y - b.y);
+    for (const e of events) {
+      if (e.sep !== null) { current = e.sep; continue; }
+      if (!e.msg) continue;
+      messages.push(current
+        ? { ...e.msg, sentAtRaw: current, sentAt: resolveSeparator(current, now) ?? undefined }
+        : e.msg);
+    }
+  }
   const ending = hitKnown ? "reached history already in the database"
     : !hitCap && want > 0 && messages.length >= want ? `reached requested count (${want})`
     : !hitCap ? `content stopped changing after ${stagnantStop} scrolls — MAY be the top, see caveat`
