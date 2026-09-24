@@ -22,7 +22,12 @@ import { migrate } from "../src/migrate.ts";
 import { MEDIA_DIR, DATA_DIR, ensureDirs } from "../src/paths.ts";
 import { screenshot } from "../src/screen.ts";
 import { query, tapSelector, tapRef, typeIntoRef, swipe, pressKey, typeText, assertControlAllowed, openScreen, currentFocus, restartApp, SETTINGS_SCREENS } from "../src/control.ts";
-import type { Selector } from "../src/tree.ts";
+import { dump, type Node, type Selector } from "../src/tree.ts";
+
+// What is on screen, and where. Position is included so a scroll that shows the same rows
+// shifted still counts as movement.
+const screenSignature = (nodes: Node[]) =>
+  nodes.filter((n) => n.text || n.desc).map((n) => `${n.text}|${n.desc}|${n.y}`).join("\n");
 
 const APP = "messenger";
 const text = (s: string) => ({ content: [{ type: "text" as const, text: s }] });
@@ -252,19 +257,28 @@ export function buildServer(): McpServer {
 
   server.tool(
     "droidread_swipe",
-    "Swipe the screen. 'up' reveals older messages in a chat. DEFAULT IS GENTLE (600px/300ms) — this project's own proven-safe step for reading, where every message matters. A bigger 'pixels' throw is for a different job: hunting for a name in a long inbox, where skipping content is fine and speed is the point. Confusing the two cost a real read once: a short durationMs alone does NOT make a swipe gentle, because duration only changes fling speed, not how far the gesture travels — only 'pixels' does that. Requires DROIDREAD_ALLOW_CONTROL=1.",
+    "Swipe the screen. DIRECTION NAMES THE CONTENT, NOT THE FINGER: 'up' pulls content down so you see what is ABOVE (older messages in a chat; back toward the top of a list), 'down' shows what is BELOW (further down an inbox/chat list = older chats). So on a chat list sitting at its top, 'up' does nothing — use 'down'. If the screen did not change, the reply says so. DEFAULT IS GENTLE (600px/300ms) — this project's own proven-safe step for reading, where every message matters. A bigger 'pixels' throw is for a different job: hunting for a name in a long inbox, where skipping content is fine and speed is the point. Confusing the two cost a real read once: a short durationMs alone does NOT make a swipe gentle, because duration only changes fling speed, not how far the gesture travels — only 'pixels' does that. Requires DROIDREAD_ALLOW_CONTROL=1.",
     { direction: z.enum(["up", "down", "left", "right"]),
       pixels: z.number().optional().describe("how far the swipe travels (default 600 — gentle, safe for reading; ~1400 overshoots a full screen, for fast inbox search only)"),
       durationMs: z.number().optional().describe("how slow the swipe is (default 300); does NOT change distance — see 'pixels'"),
       ...snapshotOpt },
     ({ direction, pixels, durationMs, snapshot }) => withDevice("droidread_swipe", async () => {
+      const before = screenSignature(await dump());
       await swipe(direction, durationMs ?? 300, pixels ?? 600);
       await Bun.sleep(600);
+      // A swipe that moved nothing looks exactly like a swipe that worked unless someone
+      // compares — and the usual cause is the wrong direction (e.g. 'up' on a list already
+      // at its top), not a broken gesture. Say so, so the caller flips direction instead of
+      // reaching for raw adb.
+      const moved = screenSignature(await dump()) !== before;
+      const receipt = moved
+        ? `swiped ${direction}`
+        : `swiped ${direction} — SCREEN DID NOT MOVE (already at the ${direction === "up" ? "top" : direction === "down" ? "bottom" : "edge"}? try the opposite direction)`;
       // Every action returns the screen it produced — swipe included. A swipe whose result
       // you cannot see is a blind step, and blind steps are how a caller ends up swiping
       // repeatedly hoping something appeared. Pass snapshot:false when you genuinely do not
       // need to look, for instance when a read tool follows immediately.
-      return text(await withScreen(`swiped ${direction}`, snapshot ?? true));
+      return text(await withScreen(receipt, snapshot ?? true));
     }),
   );
 

@@ -30,8 +30,10 @@ export interface LineMsg {
 }
 
 const onChatList = (nodes: Node[]) => nodes.some((n) => n.id === "name") && nodes.some((n) => n.id === "last_message");
+// The message list itself, not a text bubble: a screen of only photos/videos/stickers has
+// no #chat_ui_message_text at all, and keying on bubbles called that "not in a conversation".
 const inConversation = (nodes: Node[]) =>
-  nodes.some((n) => n.id === "chat_ui_message_text" || n.id === "chat_ui_text_message_balloon_root");
+  nodes.some((n) => n.id === "chathistory_message_list" || n.id === "chat_ui_message_text" || n.id === "chat_ui_text_message_balloon_root");
 
 let screenWidth = 0;
 async function width(): Promise<number> {
@@ -95,19 +97,35 @@ export async function toChatList(): Promise<void> {
 export async function openLineChat(target: string): Promise<void> {
   await toChatList();
 
+  // Exact name wins; a substring is never tapped on its own. A loose case-insensitive
+  // `includes` once opened "MIdS Student Affairs" for the target "sT" — a read-only group,
+  // entered by accident because "St" sits inside "Student". Partial hits are collected and
+  // reported, so the caller can pick the real name instead of the tool guessing.
+  const partial = new Set<string>();
+  const lower = target.toLowerCase();
+  let lastPage = "";
   for (let i = 0; i < 12; i++) {
     const nodes = await dump();
-    const row = nodes.find((n) => n.id === "name" && n.text.toLowerCase().includes(target.toLowerCase()));
+    const names = nodes.filter((n) => n.id === "name" && n.text);
+    const row = names.find((n) => n.text === target) ?? names.find((n) => n.text.toLowerCase() === lower);
     if (row) {
       await tap(row.x, row.y);
       await Bun.sleep(2200);
       // Verify: a coordinate read before the list scrolled lands on the wrong row.
-      if (!inConversation(await dump())) throw new Error("tap did not open a conversation — the list may have scrolled");
+      const opened = await dump();
+      if (!inConversation(opened)) throw new Error("tap did not open a conversation — the list may have scrolled");
+      const header = opened.find((n) => n.id === "header_title")?.text;
+      if (header !== undefined && header !== row.text) throw new Error(`opened "${header}", not "${row.text}" — the list may have scrolled`);
       return;
     }
+    for (const n of names) if (n.text.toLowerCase().includes(lower)) partial.add(n.text);
+    const page = names.map((n) => n.text).join("\n");
+    if (page === lastPage) break; // bottom of the list
+    lastPage = page;
     await adb("shell", "input", "swipe", "540", "1800", "540", "700", "300");
     await Bun.sleep(600);
   }
+  if (partial.size) throw new Error(`no chat named exactly "${target}" in LINE; partial matches: ${[...partial].map((p) => `"${p}"`).join(", ")} — pass the full name`);
   throw new Error(`chat not found in LINE: ${target}`);
 }
 
