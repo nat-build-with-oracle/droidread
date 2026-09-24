@@ -173,8 +173,8 @@ const line: AppPlugin = {
 
     out.push(server.tool(
       "line_open_chat",
-      "Open a LINE conversation by name and stop there. Does NOT read or scroll — pair with line_read_screen and droidread_swipe.",
-      { chat: z.string().describe("substring of the conversation name") },
+      "Open a LINE conversation by its exact name (case-insensitive) and stop there. A substring alone is never tapped: if only partial matches exist, it refuses and lists them. Does NOT read — pair with line_read_screen and droidread_swipe.",
+      { chat: z.string().describe("exact conversation name as shown in the chat list") },
       ({ chat }) => withDevice("line_open_chat", async () => {
         await openLineChat(chat);
         let screen = "";
