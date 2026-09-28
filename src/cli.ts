@@ -7,7 +7,7 @@
 import { devices } from "./adb.ts";
 import { screenSnapshot } from "./snapshot.ts";
 import { openConversation, readThread, fetchMedia, REMOTE_MEDIA_DIR } from "./apps/messenger.ts";
-import { openDb, insertMessages, getExistingKeys, pendingMedia, markMediaDownloaded, search, listMessages, messagesSince, upsertAnchors, listAnchors } from "./db.ts";
+import { openDb, insertMessages, getExistingKeys, pendingMedia, markMediaDownloaded, search, listMessages, messagesSince, upsertAnchors, listAnchors, resolveChat } from "./db.ts";
 import { migrate } from "./migrate.ts";
 import { MEDIA_DIR, DATA_DIR, ensureDirs, loadEnvFile } from "./paths.ts";
 
@@ -25,6 +25,17 @@ async function db() {
   const d = openDb();
   await migrate(d);
   return d;
+}
+
+// Read-side commands take a substring of the chat name; resolve it to the name the
+// rows are indexed under, or say why not — never report an empty chat instead.
+async function chatName(d: Awaited<ReturnType<typeof db>>, chat: string): Promise<string> {
+  try {
+    return await resolveChat(d, APP, chat);
+  } catch (e) {
+    console.error((e as Error).message);
+    process.exit(1);
+  }
 }
 
 function usage(): never {
@@ -163,7 +174,7 @@ switch (cmd) {
     const chat = positional[0];
     if (!chat) usage();
     const d = await db();
-    const pend = await pendingMedia(d, APP, chat);
+    const pend = await pendingMedia(d, APP, await chatName(d, chat));
     console.log(`photos pending download: ${pend.length}`);
     if (!pend.length) break;
 
@@ -198,7 +209,8 @@ switch (cmd) {
   case "list": {
     const chat = positional[0];
     if (!chat) usage();
-    const rows = await listMessages(await db(), APP, chat, Number(flag("n", "50")));
+    const d = await db();
+    const rows = await listMessages(d, APP, await chatName(d, chat), Number(flag("n", "50")));
     for (const r of rows) {
       const mark = r.kind === "photo" ? (r.media_file ? "[photo ✓] " : "[photo …] ") : "";
       const when = r.sent_at ? `${String(r.sent_at).slice(0, 16)}  ` : "(no time)         ";
@@ -210,7 +222,8 @@ switch (cmd) {
   case "anchors": {
     const chat = positional[0];
     if (!chat) usage();
-    const rows = await listAnchors(await db(), APP, chat);
+    const d = await db();
+    const rows = await listAnchors(d, APP, await chatName(d, chat));
     console.log(`${rows.length} anchors`);
     for (const r of rows) console.log(`  ${String(r.sent_at ?? "unresolved").padEnd(20)} ${r.raw}`);
     break;
@@ -220,8 +233,10 @@ switch (cmd) {
     const chat = positional[0];
     const since = positional.slice(1).join(" ");
     if (!chat || !since) usage();
-    const { rows, undated, total } = await messagesSince(await db(), APP, chat, since);
-    console.log(`${rows.length} messages at or after ${since}  (of ${total} indexed; ${undated} have no known send time)`);
+    const d = await db();
+    const name = await chatName(d, chat);
+    const { rows, undated, total } = await messagesSince(d, APP, name, since);
+    console.log(`${rows.length} messages in "${name}" at or after ${since}  (of ${total} indexed; ${undated} have no known send time)`);
     for (const r of rows) {
       console.log(`${String(r.sent_at).slice(0, 16)}  ${r.kind === "photo" ? "[photo] " : ""}${r.sender}: ${String(r.text).replace(/\n/g, " ").slice(0, 80)}`);
     }
