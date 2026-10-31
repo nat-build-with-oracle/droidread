@@ -20,7 +20,7 @@ import { z } from "zod";
 import { openConversation, openChatOnScreen, readScreen, resetScreenContinuity, fetchMedia, REMOTE_MEDIA_DIR, MESSENGER_PACKAGE } from "../src/apps/messenger.ts";
 import { restartApp } from "../src/control.ts";
 import { openLineChat, readLineScreen, listChats, LINE_PACKAGE } from "../src/apps/line.ts";
-import { openDb, insertMessages, getExistingKeys, pendingMedia, markMediaDownloaded, upsertAnchors } from "../src/db.ts";
+import { openDb, insertMessages, getExistingKeys, pendingMedia, markMediaDownloaded, upsertAnchors, resolveChat } from "../src/db.ts";
 import { migrate } from "../src/migrate.ts";
 import { MEDIA_DIR, ensureDirs } from "../src/paths.ts";
 import { screenSnapshot } from "../src/snapshot.ts";
@@ -107,7 +107,8 @@ const messenger: AppPlugin = {
       "List photos that are marked in the index but not yet downloaded. Read-only, does not touch the phone.",
       { chat: z.string().describe("substring of the conversation name") },
       async ({ chat }) => {
-        const pend = await pendingMedia(await db(), APP, chat);
+        const d = await db();
+        const pend = await pendingMedia(d, APP, await resolveChat(d, APP, chat));
         if (!pend.length) return text("no photos pending download");
         return text(pend.map((r) => `#${r.id} ${r.sender} ${r.media_when}`).join("\n"));
       },
@@ -120,7 +121,8 @@ const messenger: AppPlugin = {
         cap: z.number().optional().describe("max photos to fetch this run (default 10)") },
       ({ chat, cap }) => withDevice("messenger_media_fetch", async () => {
         const d = await db();
-        const pend = await pendingMedia(d, APP, chat);
+        // the index is keyed by the resolved name; the phone still gets what the caller typed
+        const pend = await pendingMedia(d, APP, await resolveChat(d, APP, chat));
         if (!pend.length) return text("no photos pending download");
         const refToId = new Map(pend.map((r) => [String(r.media_ref), Number(r.id)]));
 

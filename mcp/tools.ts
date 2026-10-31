@@ -17,7 +17,7 @@ import { devices } from "../src/adb.ts";
 import { screenSnapshot, refCount } from "../src/snapshot.ts";
 import { isEnabled, setEnabled } from "../src/plugins.ts";
 import { PLUGINS } from "./apps.ts";
-import { openDb, search, listMessages, messagesSince, listAnchors } from "../src/db.ts";
+import { openDb, search, listMessages, messagesSince, listAnchors, resolveChat } from "../src/db.ts";
 import { migrate } from "../src/migrate.ts";
 import { MEDIA_DIR, DATA_DIR, ensureDirs } from "../src/paths.ts";
 import { screenshot } from "../src/screen.ts";
@@ -174,9 +174,11 @@ export function buildServer(): McpServer {
     "Every timestamp divider ever seen in a chat, newest first. These are the anchors a message's time is derived from; inspect them to see which hours of a day have activity. Does not touch the phone.",
     { chat: z.string().describe("substring of the conversation name") },
     async ({ chat }) => {
-      const rows = await listAnchors(await db(), APP, chat);
-      if (!rows.length) return text("no anchors recorded yet — run a read first");
-      return text(`${rows.length} anchors\n` + rows.map((r) => `${String(r.sent_at ?? "unresolved").padEnd(20)} ${r.raw}`).join("\n"));
+      const d = await db();
+      const name = await resolveChat(d, APP, chat);
+      const rows = await listAnchors(d, APP, name);
+      if (!rows.length) return text(`no anchors recorded yet for "${name}" — run a read first`);
+      return text(`${rows.length} anchors in "${name}"\n` + rows.map((r) => `${String(r.sent_at ?? "unresolved").padEnd(20)} ${r.raw}`).join("\n"));
     },
   );
 
@@ -186,8 +188,10 @@ export function buildServer(): McpServer {
     { chat: z.string().describe("substring of the conversation name"),
       since: z.string().describe("local time, 'YYYY-MM-DD HH:MM'") },
     async ({ chat, since }) => {
-      const { rows, undated, total } = await messagesSince(await db(), APP, chat, since);
-      const head = `${rows.length} messages at or after ${since} (of ${total} indexed; ${undated} have no known send time)`;
+      const d = await db();
+      const name = await resolveChat(d, APP, chat);
+      const { rows, undated, total } = await messagesSince(d, APP, name, since);
+      const head = `${rows.length} messages in "${name}" at or after ${since} (of ${total} indexed; ${undated} have no known send time)`;
       if (!rows.length) return text(head);
       return text(head + "\n\n" + rows.map((r) =>
         `${String(r.sent_at).slice(0, 16)}  ${r.kind === "photo" ? "[photo] " : ""}${r.sender}: ${String(r.text).replace(/\n/g, " ").slice(0, 100)}`).join("\n"));
@@ -212,9 +216,11 @@ export function buildServer(): McpServer {
     { chat: z.string().describe("substring of the conversation name"),
       n: z.number().optional().describe("how many (default 50)") },
     async ({ chat, n }) => {
-      const rows = await listMessages(await db(), APP, chat, n ?? 50);
-      if (!rows.length) return text("nothing indexed for that chat yet");
-      return text(rows.map((r) => {
+      const d = await db();
+      const name = await resolveChat(d, APP, chat);
+      const rows = await listMessages(d, APP, name, n ?? 50);
+      if (!rows.length) return text(`nothing indexed for "${name}" yet`);
+      return text(`last ${rows.length} messages in "${name}"\n` + rows.map((r) => {
         const mark = r.kind === "photo" ? (r.media_file ? "[photo ✓] " : "[photo …] ") : "";
         return `${mark}${r.sender}: ${r.text}`;
       }).join("\n"));

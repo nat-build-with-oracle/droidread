@@ -68,6 +68,36 @@ export async function getExistingKeys(db: Client, app: string, chat: string): Pr
   return new Set(res.rows.map((r) => `${r.sender as string}|${r.text as string}`));
 }
 
+/**
+ * Resolve what a caller typed to the ONE chat name its rows are indexed under.
+ *
+ * Read-side tools describe their `chat` argument as a substring, but every query keys
+ * on the exact name a read indexed under — so "Team" against "Team Chat" matched
+ * nothing and reported 0 messages, indistinguishable from an empty chat. Exact match
+ * wins; otherwise a case-insensitive substring must hit exactly one indexed chat.
+ * Ambiguity is refused, not guessed — the rule messenger_open_chat applies on the phone.
+ *
+ * READ side only. Indexing keeps the caller's exact name: resolving there would file a
+ * new chat's messages under an older chat whose name happens to contain it.
+ */
+export async function resolveChat(db: Client, app: string, chat: string): Promise<string> {
+  if (!chat.trim()) throw new Error("chat name is empty");
+  const res = await db.execute({
+    sql: `SELECT chat FROM messages WHERE app = ? UNION SELECT chat FROM anchors WHERE app = ?`,
+    args: [app, app],
+  });
+  const names = res.rows.map((r) => String(r.chat)).sort();
+  if (names.includes(chat)) return chat;
+  const needle = chat.toLocaleLowerCase();
+  const hits = names.filter((n) => n.toLocaleLowerCase().includes(needle));
+  if (hits.length === 1) return hits[0]!;
+  const quote = (xs: string[]) => xs.slice(0, 20).map((x) => `"${x}"`).join(", ") + (xs.length > 20 ? ", …" : "");
+  if (hits.length > 1) throw new Error(`"${chat}" matches ${hits.length} indexed ${app} chats — pass one exactly: ${quote(hits)}`);
+  throw new Error(names.length
+    ? `no indexed ${app} chat matches "${chat}" — indexed: ${quote(names)}`
+    : `no ${app} chat indexed yet — run a read first`);
+}
+
 export async function pendingMedia(db: Client, app: string, chat: string) {
   const res = await db.execute({
     sql: `SELECT id, sender, media_ref, media_when FROM messages
